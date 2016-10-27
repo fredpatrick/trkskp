@@ -1,0 +1,5 @@
+This directory contains files for Sketchup plugins used to design layouts for 
+O-gauge train layouts. These plugins are intended to be used with applications 
+trkDriver and TrkControler. In particular the plugins can provide the configuration
+data tying the physical layout to the models allowing automatic control of
+trains.

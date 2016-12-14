@@ -47,7 +47,8 @@ require "#{$trkdir}/sectionlist.rb"
 
 class Zones
 
-    def Zones.load_zones
+    def Zones.load_zones                         #load_zones is class method
+        @@zones = Hash.new
         Zone.init_class_variables
         $logfile.puts "Begin load_zones"
         @@zones_group = nil
@@ -69,22 +70,192 @@ class Zones
             $logfile.puts "Loading zones"
             @@zones_group.entities.each do |z|
                  if Zone.zone_group? z
-                     zone = Zone.factory(z)
+                     zone = Zones.factory(z)
                      $logfile.puts zone.to_s
                  end
             end
         end
-        $logfile.puts "End load_zones, # of zones #{Zone.zones.length}"
+        $logfile.puts "End load_zones, # of zones #{Zones.zones.length}"
     end
+    def Zones.factory(arg, view = nil)
+        $logfile.puts "Zones.factory arg = #{arg.class}"
+        zone = nil
+        zone_group    = nil
+        start_section = nil
+        if Zone.zone_group? arg
+            zone_group = arg 
+        else
+            start_section = arg
+            zone_group = Zones.zones_group.entities.add_group
+            zone_group.name = "zone"
+        end
+        begin
+            zone = Zone.new(zone_group, start_section)
+            @@zones[zone.zone_name] = zone
+            zone.visible=true
+            $logfile.puts "Zones.factory #{zone.to_s}"
+        rescue => ex
+            puts "#{ex.class} #{ex.message}\n"
+            if !ex.is_a? RuntimeError
+                ex.backtrace.each { |l| puts l }
+                $logfile.puts "Zones.factory, #{ex.class} #{ex.message}\n"
+                ex.backtrace.each { |l| $logfile.puts l }
+                $logfile.puts "Zones.factory, erasing zone"
+            end
+            zone_group.erase!
+            zone = nil
+        end
+        $logfile.flush
+        if !view.nil? 
+            view.refresh
+        end
+        return zone
+    end
+
 
     def Zones.zones_group
         return @@zones_group
+    end
+
+    def Zones.toggle_visibility
+        if @@zones_group.nil? 
+            return
+        end
+
+        if (!@@zones_group.visible? )
+            vmenu = UI.menu("View")
+            vmenu.set_validation_proc($view_zones_id) { MF_CHECKED }
+            @@zones_group.visible = true
+        else
+            vmenu = UI.menu("View")
+            vmenu.set_validation_proc($view_zones_id) { MF_UNCHECKED }
+            @@zones_group.visible = false
+        end
+    end
+    def Zones.zones
+        #@@zones.each_pair { |k, v| $logfile.puts "   key #{k}        #{v}" }
+        return @@zones.values
+    end
+
+    def Zones.zone(zone_name)
+        return @@zones[zone_name]
+    end
+
+    def Zones.delete_zone(zone_name)
+        zone = @@zones[zone_name]
+        zone.erase
+        @@zones.delete zone_name
+    end
+
+    def Zones.list
+        $logfile.puts "Zone.list"
+        @@zones.keys.each {|k| $logfile.puts "    #{k}"  }
+    end
+
+    def Zones.add_vertex_data
+
+        @@zones.values.each { |z| z.add_vertex_data }
+    end
+
+    def Zones.export_vertex_data
+        model_path = Sketchup.active_model.path
+        if model_path == ""
+            return nil
+        end
+        vtxdir = File.dirname(model_path) + '/'
+        model_basename = File.basename(model_path, '.skp')
+        filename = UI.savepanel("Save Vertex File", vtxdir, model_basename + '.vtx')
+        if filename.nil?
+            return nil
+        end
+        vtxfile = File.open(filename, "w")
+        @@zones.values.each { |z| 
+            puts "Zones.export_vertex_data, zone_name = #{z.zone_name}"
+            z.export_vertices(vtxfile) 
+        }
+    end
+
+    def Zones.delete_vertex_data
+        @@zones.values.each { |z| 
+            z.delete_vertices
+        }
+    end
+
+    def Zones.report_file
+        puts "Zones.report_file"
+        model_path = Sketchup.active_model.path
+        if model_path == ""
+            return nil
+        end
+        rptdir = File.dirname(model_path) + '/'
+        model_basename = File.basename(model_path, '.skp')
+        filename = UI.savepanel("Save Report File", rptdir, model_basename + '.rpt')
+        puts rptdir
+
+        if filename.nil?
+            return nil
+        end
+        puts filename
+        return File.open(filename, "w")
+    end
+
+    def Zones.report_by_zone
+        @@zones.values.each { |z| z.report_sections }
+    end
+
+    def Zones.report_switches
+    #               012345678901234567890123456789012345678901234567890
+        hdr_txt2 = "  Label    Code      Direction"
+        hdr_txt1 = "          Diameter            "
+        if $rptfile.nil?
+            puts "\n\n   Report Switches"
+            puts hdr_txt1
+            puts hdr_txt2
+        else
+            $rptfile.puts "\n\n Report Switches"
+            $rptfile.puts hdr_txt1
+            $rptfile.puts hdr_txt2
+        end
+        Section.switches.each do |sw|
+            if $rptfile.nil?
+                printf(" %-9s  %3s        %-5s\n", sw.label, sw.code, sw.direction)
+            else
+                $rptfile.printf(" %-9s  %3s        %-5s\n", sw.label, sw.code, sw.direction)
+            end
+        end
+    end
+
+    def Zones.report_summary
+  #                 0123456789012345678901234567890123456789012345678901234567890123456789
+        hdr_txt1 = " zone_name           connected?   zone_type     # of   " + 
+                                                                        "     Start    End"
+        hdr_txt2 = "                                              sections " +
+                                                                       "     Switch   Switch"
+        if $rptfile.nil?
+            puts "\n\n    Report Summary Model = #{$model_basename} #{Time.now.ctime}"
+            puts hdr_txt1
+            puts hdr_txt2
+        else
+            $rptfile.puts "\n\n    Report Summary Model = #{$model_basename} #{Time.now.ctime}"
+            $rptfile.puts hdr_txt1
+            $rptfile.puts hdr_txt2
+        end
+        @@zones.values.each do |z|
+            if $rptfile.nil?
+                printf(" %-19s %5s      %10s      %4d        %4s    %4s\n",
+                            z.zone_name, z.connected?, z.type, z.count,
+                                                     z.start_switch_label, z.end_switch_label)
+            else
+                $rptfile.printf(" %-19s %5s      %10s      %4d        %4s    %4s\n",
+                            z.zone_name, z.connected?, z.type, z.count,
+                                                     z.start_switch_label, z.end_switch_label)
+            end
+        end
     end
 end
 
 class Zone
     def Zone.init_class_variables
-        @@zones = Hash.new
         model = Sketchup.active_model
         @@zone_material = model.materials["zone"]
         if @@zone_material.nil?
@@ -99,41 +270,6 @@ class Zone
         @@zone_switch_style    = "edges"
         $logfile.puts "model.layers.length #{model.layers.length}"
         model.layers.add("zones")
-    end
-
-    def Zone.factory(arg, view = nil)
-        $logfile.puts "Zone.factory arg = #{arg.class}"
-        zone = nil
-        zone_group    = nil
-        start_section = nil
-        if Zone.zone_group? arg
-            zone_group = arg 
-        else
-            start_section = arg
-            zone_group = Zones.zones_group.entities.add_group
-            zone_group.name = "zone"
-        end
-        begin
-            zone = Zone.new(zone_group, start_section)
-            @@zones[zone.zone_name] = zone
-            zone.visible=false
-            $logfile.puts "Zone.factory #{zone.to_s}"
-        rescue => ex
-            puts "#{ex.class} #{ex.message}\n"
-            if !ex.is_a? RuntimeError
-                ex.backtrace.each { |l| puts l }
-                $logfile.puts "Zone.factory, #{ex.class} #{ex.message}\n"
-                ex.backtrace.each { |l| $logfile.puts l }
-                $logfile.puts "Zone.factory, erasing zone"
-            end
-            zone_group.erase!
-            zone = nil
-        end
-        $logfile.flush
-        if !view.nil? 
-            view.refresh
-        end
-        return zone
     end
 
     def initialize(zone_group, start_section = nil)
@@ -255,7 +391,7 @@ class Zone
             rescue => ex
                 puts "#{ex.class} #{ex.message}\n"
                 ex.backtrace.each { |l| puts l }
-                $logfile.puts "Zone.factory, #{ex.class} #{ex.message}\n"
+                $logfile.puts "Zones.factory, #{ex.class} #{ex.message}\n"
                 ex.backtrace.each { |l| $logfile.puts l }
                 dump_group(@zone_group, 1) 
                 @zone_group.entities.each do |e|
@@ -310,19 +446,6 @@ class Zone
         return @@zone_switch_style
     end
 
-    def Zone.zones
-        #@@zones.each_pair { |k, v| $logfile.puts "   key #{k}        #{v}" }
-        return @@zones.values
-    end
-
-    def Zone.zone(zone_name)
-        return @@zones[zone_name]
-    end
-
-    def Zone.list
-        $logfile.puts "Zone.list"
-        @@zones.keys.each {|k| $logfile.puts "    #{k}"  }
-    end
 
     def Zone.zone_group?(arg)
         if arg.nil?
@@ -340,13 +463,50 @@ class Zone
         return @zone_name
     end
 
+    def export_vertices(vtxfile)
+        @zone_group.entities.each { |e|
+            next if !e.is_a? Sketchup::Group
+            next if e.name != "slices"
+
+            slices_group = e
+            zone_index = slices_group.get_attribute("SlicesAttrs", "zone_index")
+            t          = slices_group.transformation
+            slice_index = 0
+            slices_group.entities.each { |s|
+                if s.is_a? Sketchup::Face
+                    slice = s
+                    str_l = sprintf("%6s%6d%6d", @zone_name, zone_index, slice_index)
+                    slice.vertices.each_with_index{ |v,i|
+                        
+                        p0 = v.position
+                        pt = v.position.transform(t)
+                        px = pt.x
+                        py = pt.y
+                        pz = pt.z
+                        str = str_l + sprintf("%6d%12.6f%12.6f%12.6f\n", i, px, py, pz)
+                        vtxfile.puts str
+                    }
+                    slice_index += 1
+                end
+            }
+        }
+        vtxfile.flush
+    end
+
+    def delete_vertices
+        @zone_group.entities.each { |e|
+            next if !e.is_a? Sketchup::Group
+            next if e.name != "slices"
+            e.erase!
+        }
+    end
+
     def erase
         $logfile.puts "zone.erase, zone_name = #{@zone_name}"
         if !@section_list.nil?
             @section_list.sections.each { |s| s.reset_zone_parms }
         end
         @zone_group.erase!
-        @@zones.delete @zone_name
     end
 
     def section_list
@@ -411,6 +571,17 @@ class Zone
 #       "#{@section_list.to_s(ntab+1)}"
     end
 
+    def add_vertex_data
+        n = @section_list.sections.length
+        last = false
+        @section_list.sections.each_with_index { |s,i|
+            if i == n - 1 then last = true end
+            slices_group = s.make_slices(@zone_group, last)
+            slices_group.hidden = true
+        }
+    end
+
+
     def report_sections
         #           012345678901234567890123456789012345678901234567890123456789
         hdr_txt2 = "  Index     Type       Code        Slope-fwd   Tag      Height    Height"
@@ -441,77 +612,8 @@ class Zone
         end
     end
 
-    def Zone.report_file
-        puts "Zone.report_file"
-        model_path = Sketchup.active_model.path
-        if model_path == ""
-            return nil
-        end
-        rptdir = File.dirname(model_path) + '/'
-        model_basename = File.basename(model_path, '.skp')
-        filename = UI.savepanel("Save Report File", rptdir, model_basename + '.rpt')
-        puts rptdir
 
-        if filename.nil?
-            return nil
-        end
-        puts filename
-        return File.open(filename, "w")
-    end
 
-    def Zone.report_by_zone
-        @@zones.values.each { |z| z.report_sections }
-    end
-
-    def Zone.report_switches
-    #               012345678901234567890123456789012345678901234567890
-        hdr_txt2 = "  Label    Code      Direction"
-        hdr_txt1 = "          Diameter            "
-        if $rptfile.nil?
-            puts "\n\n   Report Switches"
-            puts hdr_txt1
-            puts hdr_txt2
-        else
-            $rptfile.puts "\n\n Report Switches"
-            $rptfile.puts hdr_txt1
-            $rptfile.puts hdr_txt2
-        end
-        Section.switches.each do |sw|
-            if $rptfile.nil?
-                printf(" %-9s  %3s        %-5s\n", sw.label, sw.code, sw.direction)
-            else
-                $rptfile.printf(" %-9s  %3s        %-5s\n", sw.label, sw.code, sw.direction)
-            end
-        end
-    end
-
-    def Zone.report_summary
-  #                 0123456789012345678901234567890123456789012345678901234567890123456789
-        hdr_txt1 = " zone_name           connected?   zone_type     # of   " + 
-                                                                        "     Start    End"
-        hdr_txt2 = "                                              sections " +
-                                                                       "     Switch   Switch"
-        if $rptfile.nil?
-            puts "\n\n    Report Summary Model = #{$model_basename} #{Time.now.ctime}"
-            puts hdr_txt1
-            puts hdr_txt2
-        else
-            $rptfile.puts "\n\n    Report Summary Model = #{$model_basename} #{Time.now.ctime}"
-            $rptfile.puts hdr_txt1
-            $rptfile.puts hdr_txt2
-        end
-        @@zones.values.each do |z|
-            if $rptfile.nil?
-                printf(" %-19s %5s      %10s      %4d        %4s    %4s\n",
-                            z.zone_name, z.connected?, z.type, z.count,
-                                                     z.start_switch_label, z.end_switch_label)
-            else
-                $rptfile.printf(" %-19s %5s      %10s      %4d        %4s    %4s\n",
-                            z.zone_name, z.connected?, z.type, z.count,
-                                                     z.start_switch_label, z.end_switch_label)
-            end
-        end
-    end
 
     def dump_group(g, level)
         $logfile.puts tabs(level) + "#{g.name}  #{g.guid}"

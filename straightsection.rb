@@ -74,9 +74,23 @@ class StraightSection < Section
         @zone_index = @section_group.get_attribute(sname, "zone_index")
         xform_bed_a = @section_group.get_attribute(sname, "xform_bed")
         @xform_bed  = Geom::Transformation.new(xform_bed_a)
+        xform_alpha_a = @section_group.get_attribute(sname, "xform_alpha")
+        if xform_alpha_a.nil? # this code kludge while we add slices_group
+            @xform_alpha = make_xform_alpha()
+            @section_group.set_attribute(sname, "xform_alpha",  @xform_alpha.to_a)
+        else
+            @xform_alpha  = Geom::Transformation.new(xform_alpha_a)
+        end
         @code = @lencode
     end
 
+    def make_xform_alpha()
+        alpha       = asin( @slope )
+        p0          = Geom::Point3d.new  0, 0, 0
+        ux          = Geom::Vector3d.new 1, 0, 0
+        xform_alpha = Geom::Transformation.rotation p0, ux, alpha
+        return xform_alpha
+    end
     ####################################################################
     ################################################ build_sketchup_section
     def build_sketchup_section(target_point)
@@ -121,7 +135,7 @@ class StraightSection < Section
 
         ux         = Geom::Vector3d.new 1, 0, 0
         uz         = Geom::Vector3d.new 0, 0, 1
-        tr_alpha   = Geom::Transformation.rotation p0, ux, alpha
+        @xform_alpha   = Geom::Transformation.rotation p0, ux, alpha
 
 
         sname = "SectionAttributes"
@@ -136,7 +150,7 @@ class StraightSection < Section
         np = @@bed_profile.length
         i = 0
         while i < np do
-            lpts[i] = @@bed_profile[i].transform tr_alpha
+            lpts[i] = @@bed_profile[i].transform @xform_alpha
             i += 1
         end
 
@@ -175,7 +189,7 @@ class StraightSection < Section
             np = @@rail_profile.length
             i = 0
             while i < np do
-                lpts[i] = @@rail_profile[i].transform tr_alpha
+                lpts[i] = @@rail_profile[i].transform @xform_alpha
                 lpts[i] = lpts[i] + offset
                 i += 1
             end
@@ -230,7 +244,7 @@ class StraightSection < Section
         alpha      = asin( dh /dl )
         p0         = Geom::Point3d.new  0,  0,  0
         ux         = Geom::Vector3d.new 1, 0, 0
-        tr_alpha   = Geom::Transformation.rotation p0, ux, alpha
+        @xform_alpha   = Geom::Transformation.rotation p0, ux, alpha
         vt        = Geom::Vector3d.new(0.0, dl, dh)
         xform_bed = Geom::Transformation.translation(vt)
         ic     = 1
@@ -243,7 +257,7 @@ class StraightSection < Section
                 v = pt - center
                 v.length = 1.0
                 p    = []
-                lpts[j] = (pt + v).transform tr_alpha
+                lpts[j] = (pt + v).transform @xform_alpha
                 j += 1
             end
         end
@@ -276,9 +290,6 @@ class StraightSection < Section
         text_group = outline_group.entities.add_group
         text_group.name = "text"
 
-        puts " #{@section_index}   #{@entry_tag}  #{@section_group.guid}"
-        puts " #{@section_index}   #{@exit_tag}"
-        puts " #{@section_index}   #{@slope}"
         entry_tag = self.entry_tag
         slope     = @slope
         if entry_tag != "A"
@@ -290,7 +301,6 @@ class StraightSection < Section
         bx = char_group.bounds
         bkgrnd_w = bx.width + 1.0
         bkgrnd_h = 1.25
-        puts "bkgrnd_w #{bkgrnd_w}"
         len_s    = @lens[@lencode][0]
         if bkgrnd_w > len_s
             char_group.entities.clear!
@@ -302,10 +312,6 @@ class StraightSection < Section
         xmx      = +0.5 * bkgrnd_h 
         ymn      = 0.5 *len_s - 0.5 * bkgrnd_w
         ymx      = 0.5 *len_s + 0.5 * bkgrnd_w
-        puts "xmn #{xmn}"
-        puts "xmx #{xmx}"
-        puts "ymn #{ymn}"
-        puts "ymx #{ymx}"
         trkh     = @@bed_h + @@tie_h + 0.25
         bkz      = trkh + 0.01
         p0   = Geom::Point3d.new(xmn, ymn, bkz)
@@ -426,4 +432,34 @@ class StraightSection < Section
     end
     #################################### end StraightSection.extend_profile
 
+    def make_slices(zone_group, last)
+        slices_group = zone_group.entities.add_group
+        slices_group.name = "slices"
+        slices_group.attribute_dictionary("SlicesAttrs", true)
+        slices_group.set_attribute("SlicesAttrs", "zone_index", @zone_index)
+        slices_group.set_attribute("SlicesAttrs", "section_guid", @section_group.guid)
+
+        entry_tag = self.entry_tag
+        cpt = connection_pt(entry_tag)
+        slices_group.transformation = make_tr_group(cpt)
+
+        lpts = []
+        @@bed_profile.each_with_index{ |p,i| lpts[i] = p.transform @xform_alpha}
+
+        nface = 1
+        if last
+            nface = 2
+        end
+        rpts = []
+        n = 0
+        while ( n < nface)
+            f = slices_group.entities.add_face( lpts)
+            f.attribute_dictionary("SliceAttrs", true)
+            f.set_attribute("SliceAttrs","index", n)
+            lpts.each_with_index{ |p,i| rpts[i] = p.transform @xform_bed}
+            rpts.each_with_index{ |p,i| lpts[i] = p}
+            n += 1
+        end
+        return slices_group
+    end
 end  # end of Class StraightSection

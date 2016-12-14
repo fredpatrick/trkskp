@@ -1,4 +1,3 @@
-
  #
  # ============================================================================
  #                   The XyloComp Software License, Version 1.1
@@ -52,29 +51,55 @@ require "#{$trkdir}/zone.rb"
 $exStrings = LanguageHandler.new("track.strings")
 
 include Math
-
 class ZoneTool
     def initialize
-        SKETCHUP_CONSOLE.show
-        
         TrackTools.tracktools_init("ZoneTool")
-        @on_target = false
-        @displayit = true if @section_list
+        $logfile.flush
+
+        $current_connection_point = nil
+        @dtxt = ""
+        cursor_path = Sketchup.find_support_file("riser_cursor_0.png",
+                                                 "Plugins/xc_tracktools/")
+        if cursor_path
+            @cursor_looking = UI.create_cursor(cursor_path, 16, 16) 
+        else
+            UI.messagebox("Couldnt get cursor_path")
+            return
+        end 
+        cursor_path = Sketchup.find_support_file("riser_cursor_1.png", 
+                                                 "Plugins/xc_tracktools/")
+        if  cursor_path
+            @cursor_on_target = UI.create_cursor(cursor_path, 16, 16) 
+        else
+            UI.messagebox("Couldnt get cursor_path")
+            return
+        end 
+        @ip_xform = Sections.sections_group.transformation.clone
+        @ip_xform.invert!
+
+        @cursor_id = @cursor_looking
+        @istate = 0 
+    end
+
+    def onSetCursor
+        if @cursor_id
+            
+            UI.set_cursor(@cursor_id)
+        end
     end
 
     def activate
-        puts "activate ZoneTool"
-        $logfile.puts "################################### activate ZonesTool #{Time.now.ctime}"
-        $logfile.puts "activate ZoneTool"
+        $logfile.puts "################################### activate ZoneTool #{Time.now.ctime}"
+        puts          "################################### activate ZoneTool #{Time.now.ctime}"
         @ip = Sketchup::InputPoint.new
         @drawn = false
-        @menu_def = false
+        @menu_flg = false
     end
 
     def deactivate(view)
-        puts "deactivate ZoneTool"
         TrackTools.model_summary
-         $logfile.puts "################################ deactivate ZoneTool #{Time.now.ctime}"
+        $logfile.puts "################################ deactivate ZoneTool #{Time.now.ctime}"
+        puts          "################################ deactivate ZoneTool #{Time.now.ctime}"
     end
 
     def onMouseMove( flags, x, y, view)
@@ -83,32 +108,18 @@ class ZoneTool
         npick = @ph.do_pick(x, y)
         if npick > 0
             path = @ph.path_at(0)
-            if !path[0].is_a? Sketchup::Group
-                return false
-            elsif path[0].name != "sections"
-                return false
+            section = Section.section_path?(path)
+            if section.nil? 
+                return
             end
-            puts "onMouseMove, sections, npick = #{npick}"
-            if !path[1].is_a? Sketchup::Group
-                 return false
-            elsif path[1].name != "section"
-                return false
-            end
-            puts "got section"
-            section_group = path[1]
-            @section = Section.section(section_group.guid)
-            @on_target = false
+            @section = section
             if @section.type != "switch"
-                @on_target = true
                 zone_name = @section.zone_name
-                @zone_found = Zone.zone(zone_name)
+                @zone_found = Zones.zone(zone_name)
                 if !@zone_found.nil?
-                    puts "zone_found"
                     @zone_found.visible = true
                 end
-                puts "@menu_def = #{@menu_def}"
-                if @menu_def == false
-                    puts "make context menu"
+                if @menu_flg == false
                     make_context_menu
                 end
                 if !@zone_found.nil?
@@ -119,106 +130,145 @@ class ZoneTool
                 end
             end
         else
-            @on_target = false
-            if !@section.nil?
-                #@section.outline_visible = false
-            end
             @section = nil
             @zone_found = nil
             remove_context_menu
         end
     end
 
-    def onLButtonDown(fags, x, y, view)
-        @ip.pick view, x, y
-        @ph = view.pick_helper
-        @ph.do_pick(x, y)
-        entities = @ph.all_picked
-        puts "onLButtonDown, entities.length #{entities.length}"
-        $logfile.puts "onLButtonDown, entities.length #{entities.length}"
-        entities.each_with_index do |e,i| 
-            puts "  #{i} #{e.typename} " 
-            $logfile.puts "  #{i} #{e.typename} " 
-            if e.is_a? Sketchup::Group
-                $logfile.puts "    #{e.name}"
-                puts "    #{e.name}"
-            end
-        end 
-        $logfile.flush
-    end
-
-    def onRButtonDown(flags, x, y, view)
-        puts "onRButtonDown: #{Time.now.ctime}"
-        puts "onRButtonDown: @zone_state #{@zone_state}"
-    end
-
     def remove_context_menu
-        if @menu_def
+        if @menu_flg
             undef getMenu
-            @menu_def = false
-            @itemp_new_id    = nil
-            @itemp_report_id = nil
-            @itemp_erase_id  = nil
+            @menu_flg = false
+            @item_new_id    = nil
+            @item_report_id = nil
+            @item_erase_id  = nil
+            @cursor_id = @cursor_looking
         end
     end
 
     def make_context_menu
         def getMenu(menu, flags, x, y, view)
-            puts "onMenu: #{Time.now.ctime}"
-            puts "onMenu: @zone_state #{@zone_state}"
             @current_menu = menu
-            @item_new_id = menu.add_item("New") {
-                puts "Mode = New"
+            @item_new_id = menu.add_item("New Zone") {
                 if !@section.nil?
-                   zone = Zone.factory(@section, view)
+                   zone = Zones.factory(@section, view)
                 end
                 view.refresh
             }
-            @item_report_id = menu.add_item("Report") {
-                puts "Mode = Report"
-                $rptfile = Zone.report_file
-                Zone.report_summary
-                Zone.report_switches
-                Zone.report_by_zone
-                if !$rptfile.nil?
-                    $rptfile.flush
-                end
-            }
-            @item_show_all_id = menu.add_item("Show All") {
-                $logfile.puts "Zonetool.show all"
-                Zone.zones.each { |z| z.visible= true}
-                view.refresh
-                $logfile.flush
-            }
-            @item_hide_all_id = menu.add_item("Hide All") {
-                $logfile.puts "Zonetool.hide all"
-                Zone.zones.each { |z| z.visible= false}
-                view.refresh
-                $logfile.flush
-            }
-            @item_erase_id = menu.add_item("Erase") {
-                puts "Mode = Erase, @section #{@section}"
+            @item_delete_id = menu.add_item("Delete Zone") {
                 if !@section.nil?
                     zone_name = @section.zone_name
-                    puts "zone_name #{zone_name}"
                     if zone_name != "unassigned"
-                        zone = Zone.zone(zone_name)
-                        zone.erase
+                        zone = Zones.zone(zone_name)
+                        Zones.delete_zone(zone_name)
                         view.refresh
                     end
                 end
                 $logfile.flush
             }
+            @item_report_id = menu.add_item("Report") {
+            }
             if @zone_state == 0
                 menu.set_validation_proc(@item_new_id) { MF_GRAYED} 
                 menu.set_validation_proc(@item_report_id) { MF_ENABLED} 
-                menu.set_validation_proc(@item_erase_id) { MF_ENABLED} 
+                menu.set_validation_proc(@item_delete_id) { MF_ENABLED} 
             elsif @zone_state == 1
                 menu.set_validation_proc(@item_new_id) { MF_ENABLED} 
                 menu.set_validation_proc(@item_report_id) { MF_GRAYED} 
-                menu.set_validation_proc(@item_erase_id) { MF_GRAYED} 
+                menu.set_validation_proc(@item_delete_id) { MF_GRAYED} 
             end
         end
-        @menu_def = true
+        @menu_flg = true
+        @cursor_id = @cursor_on_target
+    end
+
+    def ZoneTool.testreport 
+        Zones.report_summary
+    end
+end
+
+################################################################# ExportZoneReport
+
+class ExportZoneReport
+    def initialize
+        TrackTools.tracktools_init("ExportZoneReport")
+    end
+
+
+    def activate
+        $logfile.puts "########################### activate ExportZoneReport #{Time.now.ctime}"
+        puts          "########################### activate ExportZoneReport #{Time.now.ctime}"
+        puts "Mode = Report"
+        $rptfile = Zones.report_file
+        Zones.report_summary
+        Zones.report_switches
+        Zones.report_by_zone
+        if !$rptfile.nil?
+            $rptfile.flush
+        end
+    end
+
+    def deactivate(view)
+        $logfile.puts "######################### deactivate ExportZoneReport #{Time.now.ctime}"
+        puts          "######################### deactivate ExportZoneReport #{Time.now.ctime}"
+        $logfile.flush
+    end
+end
+
+################################################################### AddVertexData
+
+class AddVertexData
+    def initialize
+        TrackTools.tracktools_init("AddVertexData")
+    end
+
+    def activate
+        $logfile.puts "########################### activate AddVertexData #{Time.now.ctime}"
+        puts          "########################### activate AddVertexData #{Time.now.ctime}"
+        Zones.add_vertex_data
+    end
+
+    def deactivate(view)
+        $logfile.puts "########################### deactivate AddVertexData #{Time.now.ctime}"
+        puts          "########################### deactivate AddVertexData #{Time.now.ctime}"
+    end
+end
+
+################################################################### ExportVertexData
+
+class ExportVertexData
+    def initialize
+        TrackTools.tracktools_init("ExportVertexData")
+    end
+
+    def activate
+        $logfile.puts "########################### activate ExportVertexData #{Time.now.ctime}"
+        puts          "########################### activate ExportVertexData #{Time.now.ctime}"
+        Zones.export_vertex_data
+    end
+
+    def deactivate(view)
+        $logfile.puts "########################## deactivate ExportVertexData #{Time.now.ctime}"
+        puts          "########################## deactivate ExportVertexData #{Time.now.ctime}"
+    end
+end
+
+################################################################### DeleteVertexData
+
+class DeleteVertexData
+    def initialize
+        TrackTools.tracktools_init("DeleteVertexData")
+    end
+
+    def activate
+        $logfile.puts "########################### activate DeleteVertexData #{Time.now.ctime}"
+        puts          "########################### activate DeleteVertexData #{Time.now.ctime}"
+        Zones.delete_vertex_data
+    end
+
+    def deactivate(view)
+        $logfile.puts "########################## deactivate DeleteVertexData #{Time.now.ctime}"
+        puts          "########################## deactivate DeleteVertexData #{Time.now.ctime}"
     end
 end

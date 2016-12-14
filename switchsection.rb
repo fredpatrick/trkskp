@@ -75,6 +75,13 @@ class SwitchSection < Section
         @xform_bed      = Geom::Transformation.new(xform_bed_a )
         xform_bed_arc_a = @section_group.get_attribute(sname, "xform_bed_arc")
         @xform_bed_arc  = Geom::Transformation.new(xform_bed_arc_a )
+        xform_alpha_a = @section_group.get_attribute(sname, "xform_alpha")
+        if xform_alpha_a.nil? # this code kludge while we add slices_group
+            @xform_alpha = make_xform_alpha()
+            @section_group.set_attribute(sname, "xform_alpha",  @xform_alpha.to_a)
+        else
+            @xform_alpha  = Geom::Transformation.new(xform_alpha_a)
+        end
         @switch_index = @section_group.get_attribute(sname, "switch_index")
         if @switch_index.nil?
             @switch_index = @@switch_count
@@ -85,6 +92,13 @@ class SwitchSection < Section
         @code = @dcode
     end
 
+    def make_xform_alpha()
+        alpha       = asin( @slope )
+        p0          = Geom::Point3d.new  0, 0, 0
+        ux          = Geom::Vector3d.new 1, 0, 0
+        xform_alpha = Geom::Transformation.rotation p0, ux, alpha
+        return xform_alpha
+    end
     ###################################################################
     ####################################### build_sketchup_section
     def build_sketchup_section(target_point)
@@ -143,6 +157,13 @@ class SwitchSection < Section
         tr_vt_arc  = Geom::Transformation.translation( vt_arc )
         @xform_bed_arc =  tr_vt_arc * t1
 
+        dh              = @slope * a
+        dx              = 0
+        dl              = a
+        alpha           = asin( dh /dl )
+        vt              = Geom::Vector3d.new 0,  dl, dh
+        @xform_bed_alen = Geom::Transformation.translation( vt )
+
 
         dh           = @slope * len_straight
         dx           = 0
@@ -154,7 +175,7 @@ class SwitchSection < Section
         alpha        = asin( dh /dl )
         ux           = Geom::Vector3d.new 1, 0, 0
         p0           = Geom::Point3d.new  0,  0,  0
-        tr_alpha     = Geom::Transformation.rotation p0, ux, alpha
+        @xform_alpha     = Geom::Transformation.rotation p0, ux, alpha
 
         sname = "SectionAttributes"
         @section_group.set_attribute(sname, "type",          "switch")
@@ -173,7 +194,7 @@ class SwitchSection < Section
         np = @@bed_profile.length
         i = 0
         while i < np do
-            lpts[i] = @@bed_profile[i].transform tr_alpha
+            lpts[i] = @@bed_profile[i].transform @xform_alpha
             i += 1
         end
     # Build straight section bed and ties
@@ -224,7 +245,7 @@ class SwitchSection < Section
             np = @@rail_profile.length
             i = 0
             while i < np do
-                lpts[i] = @@rail_profile[i].transform tr_alpha
+                lpts[i] = @@rail_profile[i].transform @xform_alpha
                 lpts[i] = lpts[i] + offset
                 i += 1
             end
@@ -244,7 +265,7 @@ class SwitchSection < Section
         np = @@bed_profile.length
         i = 0
         while i < np do
-            kpts[i] = @@bed_profile[i].transform tr_alpha
+            kpts[i] = @@bed_profile[i].transform @xform_alpha
             kpts[i] = kpts[i] + offset
             i += 1
         end
@@ -267,7 +288,7 @@ class SwitchSection < Section
             np = @@rail_profile.length
             i = 0
             while i < np do
-                kpts[i] = @@rail_profile[i].transform tr_alpha
+                kpts[i] = @@rail_profile[i].transform @xform_alpha
                 kpts[i] = kpts[i] + offset
                 i += 1
             end
@@ -480,5 +501,74 @@ class SwitchSection < Section
     def label
         return sprintf("SW%03d", @switch_index)
     end
+
+    def make_thru_slices(switch_group, last)      
+        ###################################################### make slices_group for THRU 
+        slices_group = parent_group.entities.add_group
+        slices_group.name = "slices"
+        slices_group.attribute_dictionary("SlicesAttrs", true)
+        slices_group.set_attribute("SlicesAttrs", "zone_section_index", @zone_index)
+        slices_group.set_attribute("SlicesAttrs", "state", "out")
+        slices_group.set_attribute("SlicesAttrs", "section_guid", @section_group.guid)
+
+        n = 0
+        lpts = []
+        @@bed_profile.each_with_index{ |p,i| lpts[i] = p.transform @xform_alpha}
+
+        while ( n < @n_ties_arc + 1 )
+            f = slices_group.entities.add_face( lpts)
+            f.attribute_dictionary("SliceAttrs", true)
+            f.set_attribute("SliceAttrs","index", n)
+            if ( n == 0 )
+                lpts.each_with_index{ |p,i| lpts[i] = p.transform @xform_bed_alen}
+            else
+                lpts.each_with_index{ |p,i| lpts[i] = p.transform @xform_bed_arc}
+            end
+            n += 1
+        end
+
+        if ( last )
+            f = slices_group.entities.add_face( lpts)
+            f.attribute_dictionary("SliceAttrs", true)
+            f.set_attribute("SliceAttrs","index", n)
+        end
+        slices_group.hidden = true
+        return slices_group
+    end
+    ########################################################## make slices group for OUT
+    def make_out_slices(switch_group, last)
+        slices_group = parent_group.entities.add_group
+        slices_group.name = "slices"
+        slices_group.attribute_dictionary("SlicesAttrs", true)
+        slices_group.set_attribute("SlicesAttrs", "zone_section_index", @zone_index)
+        slices_group.set_attribute("SlicesAttrs", "state", "out")
+        slices_group.set_attribute("SlicesAttrs", "section_guid", @section_group.guid)
+
+        entry_tag = self.entry_tag
+        cpt = connection_pt(entry_tag)
+        slices_group.transformation = make_tr_group(cpt)
+
+        lpts = []
+        @@bed_profile.each_with_index{ |p,i| lpts[i] = p.transform @xform_alpha}
+
+        nface = 1
+        if last
+            nface = 2
+        end
+        rpts = []
+        n = 0
+        while ( n < nface)
+            f = slices_group.entities.add_face( lpts)
+            f.attribute_dictionary("SliceAttrs", true)
+            f.set_attribute("SliceAttrs","index", n)
+            lpts.each_with_index{ |p,i| rpts[i] = p.transform @xform_bed}
+            rpts.each_with_index{ |p,i| lpts[i] = p}
+            n += 1
+        end
+        slices_group.hidden = true
+        return slices_group
+    end
 end
+
+
 ###########################################end Class SwitchSection

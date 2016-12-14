@@ -28,7 +28,7 @@ class CurvedSection < Section
         @parms["O60"] = [30.0, @arcO60, "Full|" ]
         @parms["O48"] = [24.0, @arcO48, "Full|Half|Quarter" ]
         @parms["O36"] = [18.0, @arcO36, "Full|Half|Quarter" ]
-        puts "CurvedSection.initialize @parms #{@parms.inspect}"
+        #puts "CurvedSection.initialize @parms #{@parms.inspect}"
         super(arg)
     end
     ######################################### end of initialize
@@ -38,18 +38,40 @@ class CurvedSection < Section
         sname = "SectionAttributes"
         @dcode      = @section_group.get_attribute(sname, "diameter_code")
         @arctyp     = @section_group.get_attribute(sname, "arc_type")
+        phash = @parms[@dcode][1]
+        pb = phash[@arctyp]
+
+        @n_section_ties = pb[1]
         @direc      = @section_group.get_attribute(sname, "direction")
         @slope      = @section_group.get_attribute(sname, "slope")
         xform_bed_a = @section_group.get_attribute(sname, "xform_bed")
         @xform_bed  = Geom::Transformation.new(xform_bed_a)
         @zone_name  = @section_group.get_attribute(sname, "zone_name")
         @zone_index = @section_group.get_attribute(sname, "zone_index")
+        xform_alpha_a = @section_group.get_attribute(sname, "xform_alpha")
+        if xform_alpha_a.nil?        # this code is kludge while we add slices_group
+            radius         = (@parms[@dcode])[0]
+            arclen         = pb[0] * Math::PI / 180.0
+            @xform_alpha = make_xform_alpha(radius, arclen)
+            @section_group.set_attribute(sname, "xform_alpha",     @xform_alpha.to_a)
+        else
+            @xform_alpha  = Geom::Transformation.new(xform_bed_a)
+        end
 
-        phash = @parms[@dcode][1]
-        pb = phash[@arctyp]
 
         arclen_s = sprintf("  %5.2f", pb[0])
         @code = @dcode + arclen_s
+    end
+
+    def make_xform_alpha(radius, arclen)
+        delta       = arclen / @n_section_ties
+        dh          = @slope * radius * arclen / @n_section_ties
+        dl          = radius * sin(delta)
+        alpha       = asin( dh /dl )
+        p0          = Geom::Point3d.new  0, 0, 0
+        ux          = Geom::Vector3d.new 1, 0, 0
+        xform_alpha = Geom::Transformation.rotation p0, ux, alpha
+        return xform_alpha
     end
 
     ####################################### build_sketchup_section
@@ -104,11 +126,11 @@ class CurvedSection < Section
         phash = @parms[@dcode][1]
         pb = phash[@arctyp]
         len_arc = pb[0]
-        n_section_ties = pb[1]
+        @n_section_ties = pb[1]
         arclen = len_arc * Math::PI / 180.0
         
-        delta    = arclen / n_section_ties
-        dh       = @slope * radius * arclen / n_section_ties
+        delta    = arclen / @n_section_ties
+        dh       = @slope * radius * arclen / @n_section_ties
         dl       = radius * sin(delta)
         alpha    = asin( dh /dl )
         vt       = Geom::Vector3d.new 0,  0,  dh
@@ -124,8 +146,7 @@ class CurvedSection < Section
         @xform_bed = tr_vt * t1
 
         ux       = Geom::Vector3d.new 1, 0, 0
-        tr_alpha = Geom::Transformation.rotation p0, ux, alpha
-
+        @xform_alpha = Geom::Transformation.rotation p0, ux, alpha
 
         sname = "SectionAttributes"
         @section_group.set_attribute(sname, "type",          @type)
@@ -134,6 +155,7 @@ class CurvedSection < Section
         @section_group.set_attribute(sname, "direction",     @direc)
         @section_group.set_attribute(sname, "slope",         @slope)
         @section_group.set_attribute(sname, "xform_bed",     @xform_bed.to_a)
+        @section_group.set_attribute(sname, "xform_alpha",   @xform_alpha.to_a)
         @section_group.set_attribute(sname, "zone_name",     "unassigned")
         @section_group.set_attribute(sname, "zone_index",    9999)
 
@@ -141,7 +163,7 @@ class CurvedSection < Section
         np = @@bed_profile.length
         i = 0
         while i < np do
-            lpts[i] = @@bed_profile[i].transform tr_alpha
+            lpts[i] = @@bed_profile[i].transform @xform_alpha
             i += 1
         end
 
@@ -159,7 +181,7 @@ class CurvedSection < Section
         n  = 0
         q0 = Geom::Point3d.new
         q2 = Geom::Point3d.new
-        while n < n_section_ties
+        while n < @n_section_ties
             q0 = p0.transform @xform_bed
             q2 = p2.transform @xform_bed
             footprnt_group.entities.add_edges(p0, q0)
@@ -173,7 +195,7 @@ class CurvedSection < Section
         cpts = []
         rpts = CurvedSection.extend_profile(section_group, 
                                             body_group,
-                                            n_section_ties,
+                                            @n_section_ties,
                                             lpts,
                                             @xform_bed,
                                             @@bed_mat,
@@ -190,13 +212,13 @@ class CurvedSection < Section
             np = @@rail_profile.length
             i = 0
             while i < np do
-                lpts[i] = @@rail_profile[i].transform tr_alpha
+                lpts[i] = @@rail_profile[i].transform @xform_alpha
                 lpts[i] = lpts[i] + offset
                 i += 1
             end
             CurvedSection.extend_profile(section_group, 
                                          body_group,
-                                         n_section_ties,
+                                         @n_section_ties,
                                          lpts,
                                          @xform_bed,
                                          @@rail_mat, 
@@ -526,5 +548,42 @@ class CurvedSection < Section
         return rpts
     end
     ########################### end of CurvedSection.extend_profile
+
+    def make_slices(zone_group, last)
+        slices_group = zone_group.entities.add_group
+        slices_group.name = "slices"
+        slices_group.attribute_dictionary("SlicesAttrs", true)
+        slices_group.set_attribute("SlicesAttrs", "zone_index", @zone_index)
+        slices_group.set_attribute("SlicesAttrs", "section_guid", @section_group.guid)
+
+        entry_tag = self.entry_tag
+        cpt = connection_pt(entry_tag)
+        slices_group.transformation = make_tr_group(cpt)
+
+        lpts = []
+        @@bed_profile.each_with_index{ |p,i| lpts[i] = p.transform @xform_alpha}
+
+
+        rpts = []
+        n = 0
+        while ( n < @n_section_ties )
+            f = slices_group.entities.add_face( lpts)
+            f.attribute_dictionary("SliceAttrs", true)
+            f.set_attribute("SliceAttrs","index", n)
+            lpts.each_with_index{ |p,i| rpts[i] = p.transform @xform_bed}
+            rpts.each_with_index{ |p,i| lpts[i] = p}
+            n += 1
+        end
+
+        if ( last )
+            f = slices_group.entities.add_face( lpts)
+            f.attribute_dictionary("SliceAttrs", true)
+            f.set_attribute("SliceAttrs","index", n)
+        end
+        return slices_group
+    end
+
+
+            
 
 end  #### End of Class CurvedSection

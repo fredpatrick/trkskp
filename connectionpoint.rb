@@ -326,7 +326,7 @@ class Connector < ConnectionPoint
 
     def name
         nm = "S#{@section.section_index}-#{@tag}"
-        puts nm
+        #puts nm
         return nm
     end
 

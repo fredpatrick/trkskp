@@ -377,12 +377,10 @@ class Section
     def reset_zone_parms
         $logfile.puts "reset_zone_parms: #{Time.now.ctime}"
         $logfile.puts "                  zone_name #{@zone_name} zone_index #{@zone_index} "
-        puts "reset_zone_parms: #{@text_group.to_s}"
         if !@text_group.nil?
             @text_group.erase!
             @text_group = nil
         end
-        puts "reset_zone_parms: #{@text_group.to_s}"
         @zone_name = "unassigned"
         @zone_index = 9999
         @entry_tag  = "U"
@@ -405,26 +403,26 @@ class Section
     ###############################################################
     #################################################### closest_point
     def closest_point(target_pt)
-
        it_min = 9999
         distance_min = 9999.0
         it = 0
-        puts "section.closest_point, section_index = #{@section_index}"
         while it < @connection_pts.length
-            distance = 
-                    target_pt.distance(@connection_pts[it].position(true))
-            puts "section.closest_point, connection_pt = #{@connection_pts[it].to_s}"
-            p = @connection_pts[it].position(true)
-            puts "section.closest_point,    position (#{p.x.to_s}, #{p.y.to_s}, #{p.z.to_s} )"
-            puts "section.closest_point, distance = #{distance}"
-            if distance < distance_min
-                it_min = it
-                distance_min = distance
+            if !@connection_pts[it].connected?
+                distance = 
+                        target_pt.distance(@connection_pts[it].position(true))
+                p = @connection_pts[it].position(true)
+                if distance < distance_min
+                    it_min = it
+                    distance_min = distance
+                end
             end
             it += 1
         end
-        cpt = @connection_pts[it_min]
-        return @connection_pts[it_min]
+        if it_min == 9999 
+            return nil
+        else
+            return @connection_pts[it_min]
+        end
     end
 
     ###############################################################
@@ -533,6 +531,23 @@ class Section
     ############################################# Section.sections
     def Section.sections
         return @@track_sections.values
+    end
+
+    ##################################################################### Section.section_path?
+    def Section.section_path? (path) 
+        if !path[0].is_a? Sketchup::Group
+            return nil
+        elsif path[0].name != "sections"
+            return nil
+        end
+        if !path[1].is_a? Sketchup::Group
+            return nil
+        elsif path[1].name != "section"
+            return nil
+        end
+        section_group = path[1]
+        section = Section.section(section_group.guid)
+        return section
     end
 
     def Section.switches

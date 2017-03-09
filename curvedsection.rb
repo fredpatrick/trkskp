@@ -1,6 +1,50 @@
 
-$exStrings = LanguageHandler.new("track.strings")
+ # ============================================================================
+ #                   The XyloComp Software License, Version 1.1
+ # ============================================================================
+ # 
+ #    Copyright (C) 2016 XyloComp Inc. All rights reserved.
+ # 
+ # Redistribution and use in source and binary forms, with or without modifica-
+ # tion, are permitted provided that the following conditions are met:
+ # 
+ # 1. Redistributions of  source code must  retain the above copyright  notice,
+ #    this list of conditions and the following disclaimer.
+ # 
+ # 2. Redistributions in binary form must reproduce the above copyright notice,
+ #    this list of conditions and the following disclaimer in the documentation
+ #    and/or other materials provided with the distribution.
+ # 
+ # 3. The end-user documentation included with the redistribution, if any, must
+ #    include  the following  acknowledgment:  "This product includes  software
+ #    developed  by  XyloComp Inc.  (http://www.xylocomp.com/)." Alternately, 
+ #    this  acknowledgment may  appear in the software itself,  if
+ #    and wherever such third-party acknowledgments normally appear.
+ # 
+ # 4. The name "XyloComp" must not be used to endorse  or promote  products 
+ #    derived  from this  software without  prior written permission. 
+ #    For written permission, please contact fred.patrick@xylocomp.com.
+ # 
+ # 5. Products  derived from this software may not  be called "XyloComp", 
+ #    nor may "XyloComp" appear  in their name,  without prior written 
+ #    permission  of Fred Patrick
+ # 
+ # THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED WARRANTIES,
+ # INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ # FITNESS  FOR A PARTICULAR  PURPOSE ARE  DISCLAIMED.  IN NO  EVENT SHALL
+ # XYLOCOMP INC. OR ITS CONTRIBUTORS  BE LIABLE FOR  ANY DIRECT,
+ # INDIRECT, INCIDENTAL, SPECIAL,  EXEMPLARY, OR CONSEQUENTIAL  DAMAGES (INCLU-
+ # DING, BUT NOT LIMITED TO, PROCUREMENT  OF SUBSTITUTE GOODS OR SERVICES; LOSS
+ # OF USE, DATA, OR  PROFITS; OR BUSINESS  INTERRUPTION)  HOWEVER CAUSED AND ON
+ # ANY  THEORY OF LIABILITY,  WHETHER  IN CONTRACT,  STRICT LIABILITY,  OR TORT
+ # (INCLUDING  NEGLIGENCE OR  OTHERWISE) ARISING IN  ANY WAY OUT OF THE  USE OF
+ # THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ # 
+ #
 
+require 'sketchup.rb'
+require 'langhandler.rb'
+$exStrings = LanguageHandler.new("track.strings")
 
 include Math
 
@@ -8,8 +52,10 @@ class CurvedSection < Section
 
     ##################################################################
     ############################################# initialize
-    def initialize( arg)
-        @type = "curved"
+    def initialize( section_group)
+        @zone_guid = section_group.get_attribute("SectionAttributes", "zone_guid")
+        @zone      = $zones.zone(@zone_guid)
+        puts "CurvedsSection.initialize"
         @arcO72      = Hash.new
         @arcO72["Full"]    = [22.50, 34]
         @arcO72["Half"]    = [11.25, 20]
@@ -29,15 +75,24 @@ class CurvedSection < Section
         @parms["O48"] = [24.0, @arcO48, "Full|Half|Quarter" ]
         @parms["O36"] = [18.0, @arcO36, "Full|Half|Quarter" ]
         #puts "CurvedSection.initialize @parms #{@parms.inspect}"
-        super(arg)
+        super(section_group)
+    end
+
+    def zone
+        return @zone
+    end
+    def inline_length
+        return @inline_length
     end
     ######################################### end of initialize
     ###################################################################
     ####################################### load_sketchup_group
     def load_sketchup_group
         sname = "SectionAttributes"
-        @dcode      = @section_group.get_attribute(sname, "diameter_code")
-        @arctyp     = @section_group.get_attribute(sname, "arc_type")
+        @entry_tag       = @section_group.get_attribute(sname, "entry_tag")
+        @section_index_z = @section_group.get_attribute(sname, "section_index_z")
+        @dcode           = @section_group.get_attribute(sname, "diameter_code")
+        @arctyp          = @section_group.get_attribute(sname, "arc_type")
         phash = @parms[@dcode][1]
         pb = phash[@arctyp]
 
@@ -46,8 +101,6 @@ class CurvedSection < Section
         @slope      = @section_group.get_attribute(sname, "slope")
         xform_bed_a = @section_group.get_attribute(sname, "xform_bed")
         @xform_bed  = Geom::Transformation.new(xform_bed_a)
-        @zone_name  = @section_group.get_attribute(sname, "zone_name")
-        @zone_index = @section_group.get_attribute(sname, "zone_index")
         xform_alpha_a = @section_group.get_attribute(sname, "xform_alpha")
         if xform_alpha_a.nil?        # this code is kludge while we add slices_group
             radius         = (@parms[@dcode])[0]
@@ -57,6 +110,8 @@ class CurvedSection < Section
         else
             @xform_alpha  = Geom::Transformation.new(xform_bed_a)
         end
+        radius         = (@parms[@dcode])[0]
+        @inline_length = radius * pb[0] * Math::PI / 180.0
 
 
         arclen_s = sprintf("  %5.2f", pb[0])
@@ -75,7 +130,7 @@ class CurvedSection < Section
     end
 
     ####################################### build_sketchup_section
-    def build_sketchup_section(target_point)
+    def build_sketchup_section(target_point, section_index_g)
         if $repeat == -1
             okflg = false
             arclst = "Full|Half|Quarter"
@@ -128,6 +183,7 @@ class CurvedSection < Section
         len_arc = pb[0]
         @n_section_ties = pb[1]
         arclen = len_arc * Math::PI / 180.0
+        @inline_length =  radius * arclen
         
         delta    = arclen / @n_section_ties
         dh       = @slope * radius * arclen / @n_section_ties
@@ -148,16 +204,20 @@ class CurvedSection < Section
         ux       = Geom::Vector3d.new 1, 0, 0
         @xform_alpha = Geom::Transformation.rotation p0, ux, alpha
 
+        @entry_tag         = "A"
+        @section_index_z   = 999
         sname = "SectionAttributes"
-        @section_group.set_attribute(sname, "type",          @type)
+        @section_group.set_attribute(sname, "section_type",  @section_type)
         @section_group.set_attribute(sname, "diameter_code", @dcode)
         @section_group.set_attribute(sname, "arc_type",      @arctyp)
         @section_group.set_attribute(sname, "direction",     @direc)
         @section_group.set_attribute(sname, "slope",         @slope)
         @section_group.set_attribute(sname, "xform_bed",     @xform_bed.to_a)
         @section_group.set_attribute(sname, "xform_alpha",   @xform_alpha.to_a)
-        @section_group.set_attribute(sname, "zone_name",     "unassigned")
-        @section_group.set_attribute(sname, "zone_index",    9999)
+        @section_index_g = section_index_g
+        @section_group.set_attribute(sname, "section_index_g", @section_index_g)
+        @section_group.set_attribute(sname, "section_index_z", @section_index_z)
+        @section_group.set_attribute(sname, "entry_tag",       @entry_tag)
 
         lpts = []
         np = @@bed_profile.length
@@ -226,18 +286,22 @@ class CurvedSection < Section
                                          cpts)
             nr += 1
         end
-        self.connection_pts = cpts                       
-        section_point = connection_pt(@tag_cnnct)
+        self.connectors = cpts                       
+        section_point = connector(@tag_cnnct)
         tr_group = make_tr_group(target_point, section_point)
         @section_group.transformation = tr_group
         if @tag_cnnct == "A"
-            connection_pt("A").make_connection_link(target_point)
-            $current_connection_point = connection_pt("B")
+            connector("A").make_connection_link(target_point)
+            $current_connection_point = connector("B")
         else
-            connection_pt("B").make_connection_link(target_point)
-            $current_connection_point = connection_pt("A")
+            connector("B").make_connection_link(target_point)
+            $current_connection_point = connector("A")
         end
 
+        make_slices
+        
+        @outline_group           = outline_group_factory
+        @outline_text_group      = outline_text_group_factory
         $logfile.puts timer.elapsed
         return true
     end
@@ -264,20 +328,13 @@ class CurvedSection < Section
     ######################################################################
     ##################################### outline_group_factory
 
-    def outline_group_factory(zone_group)
-        outline_group = zone_group.entities.add_group
+    def outline_group_factory
+        outline_group = @section_group.entities.add_group
         outline_group.attribute_dictionary("OutlineAttributes", true)
-        outline_group.set_attribute("OutlineAttributes", "section_guid", @section_group.guid)
-        outline_group.set_attribute("OutlineAttributes", "section_index", @section_index)
+        outline_group.set_attribute("OutlineAttributes", "section_index_g", @section_index_g)
         outline_group.layer    = "zones"
         outline_group.name     = "outline"
         outline_group.material = Zone.material
-        entry_tag = self.entry_tag
-        cpt = connection_pt(entry_tag)
-        outline_group.transformation = make_tr_group(cpt)
-        $logfile.puts "CurvedSection.outline_group_factory, section_index #{@section_index} " +
-                         " entry_tag #{entry_tag} "
-        $logfile.puts "build_outline_group: material #{outline_group.material.to_s}"
         timer          = Timer.new("CurvedSection.build_outline_group")
         style          = Zone.style
         phash          = @parms[@dcode][1]
@@ -289,14 +346,6 @@ class CurvedSection < Section
         slope = @slope
         direc = @direc
         delta = arclen / n_section_ties
-        if entry_tag != "A"
-            slope = -@slope
-            if direc == "Left"
-                direc = "Right"
-            else
-                direc = "Left"
-            end
-        end
         dh             = slope * radius * delta
         dl             = radius * sin(delta)
         xform_b = make_curved_transformation(direc, radius, delta, dh)
@@ -344,43 +393,29 @@ class CurvedSection < Section
                 edges = outline_group.entities.add_edges(rpts[i-1],rpts[i])
             }
         end
-        outline_text_group_factory(outline_group)
         $logfile.puts timer.elapsed
         return outline_group
     end
 
-    def outline_text_group_factory(outline_group)
-        text_group = outline_group.entities.add_group
-        text_group.name = "text"
+    def outline_text_group_factory
+        outline_text_group = @section_group.entities.add_group
+        outline_text_group.name = "outline_text"
 
         radius  = @parms[@dcode][0]
         phash   = @parms[@dcode][1]
         pb      = phash[@arctyp]
 
         arclen = pb[0] * Math::PI / 180.0
-        pt    = connection_pt("B").position
+        pt    = connector("B").position
         slope = pt.z / pt.y
         direc  = @direc
-        entry_tag = self.entry_tag
-        $logfile.puts "CurvedSection.build_outline_text_group, " +
-                         "section_index #{@section_index}  entry_tag #{entry_tag} "
-        if entry_tag != "A"
-            slope = -slope
-            if direc == "Left"
-                direc = "Right"
-            elsif direc == "Right"
-                direc = "Left"
-            end
-        end
-        $logfile.puts "CurvedSection.build_outline_text_group, " +
-                         "slope #{slope}  direc #{direc} "
         p0    = Geom::Point3d.new(0.0, 0.0, 0.0)
         ux    = Geom::Vector3d.new(1.0, 0.0, 0.0)
         xform_alpha = Geom::Transformation.rotation(p0, ux, atan(slope) )
         rp     = radius + 0.625             #inside radius of background disk
         rm     = radius - 0.625             #outside radius of background disk
         ri     = radius - 0.5 * @@otxt_h     #radius of baske of characters
-        nc     = @zone_name.length
+        nc     = @zone.zone_name.length
         trk_h  = @@bed_h + @@tie_h + 0.25
 
         ############# make the background disc
@@ -412,7 +447,7 @@ class CurvedSection < Section
             end
             pts [20-j] = Geom::Point3d.new(x, y, bkz)
         end
-        face = text_group.entities.add_face(pts)
+        face = outline_text_group.entities.add_face(pts)
         face.material = "white"
         face.back_material = "white"
         face.edges.each { |e| e.hidden=true}
@@ -424,8 +459,8 @@ class CurvedSection < Section
         xform0  = Geom::Transformation.translation(vt) * t1
 
         beta = beta_a + 0.5 * delta
-        @zone_name.each_char do |c|
-            char_group = text_group.entities.add_group
+        @zone.zone_name.each_char do |c|
+            char_group = outline_text_group.entities.add_group
             char_group.entities.add_3d_text(c, TextAlignLeft, @@ofont, @@obold, false,
                                                     @@otxt_h, 0.6, 0.0, @@ofill)
             if direc == "Left"
@@ -439,18 +474,18 @@ class CurvedSection < Section
             char_entities = char_group.explode
             beta = beta + delta
         end
-        text_group.transform! xform_alpha
-        return text_group
+        outline_text_group.transform! xform_alpha
+        return outline_text_group
     end
 
     ######################################################################
     ###################################### Report
     def report
-        sname = "SectionAttributes"
-        dcode   = @section_group.get_attribute(sname, "diameter_code")
-        arctyp  = @section_group.get_attribute(sname, "arc_type")
-        type    = @section_group.get_attribute(sname, "type")
-        return [type, dcode, arctyp]
+        sname        = "SectionAttributes"
+        dcode        = @section_group.get_attribute(sname, "diameter_code")
+        arctyp       = @section_group.get_attribute(sname, "arc_type")
+        section_type = @section_group.get_attribute(sname, "section_type")
+        return [section_type, dcode, arctyp]
     end
 
     #######################################################################
@@ -465,14 +500,14 @@ class CurvedSection < Section
 
         cpt1 = nil
         if tag == "B"
-            cpt1 = self.connection_pt("A")
+            cpt1 = self.connector("A")
         else
-            cpt1 = self.connection_pt("B")
+            cpt1 = self.connector("B")
         end
         
-        pa      = self.connection_pt("A").position(true)
-        theta   = self.connection_pt("A").theta(true)
-        pb      = self.connection_pt("B").position(true)
+        pa      = self.connector("A").position(true)
+        theta   = self.connector("A").theta(true)
+        pb      = self.connector("B").position(true)
 
 
         q = Geom::Point3d.new
@@ -491,7 +526,7 @@ class CurvedSection < Section
     end
                 
     def tag
-        return sprintf("%s-S%04d", @zone_name, @zone_index)
+        return sprintf("%s-S%04d", @zone.zone_name, @zone.zone_index)
     end
 
     ####################################################################
@@ -544,21 +579,33 @@ class CurvedSection < Section
                 cpts[nc] = Connector.factory(section_group, "C", face_B)
             end
         end
+
         #puts timer.elapsed
         return rpts
     end
     ########################### end of CurvedSection.extend_profile
 
-    def make_slices(zone_group, last)
-        slices_group = zone_group.entities.add_group
-        slices_group.name = "slices"
-        slices_group.attribute_dictionary("SlicesAttrs", true)
-        slices_group.set_attribute("SlicesAttrs", "zone_index", @zone_index)
-        slices_group.set_attribute("SlicesAttrs", "section_guid", @section_group.guid)
+    def make_slices
+        @section_group.entities.each do |e|
+            if ( e.is_a? Sketchup::Group )
+                if ( e.name == "slices" )
+                    e.erase!
+                end
+            end
+        end
+        @shells           = Hash.new
 
-        entry_tag = self.entry_tag
-        cpt = connection_pt(entry_tag)
-        slices_group.transformation = make_tr_group(cpt)
+        last              = true
+        slices_group      = @section_group.entities.add_group
+        slices_group.name = "slices"
+        slices_group.hidden = true
+        slices_group.attribute_dictionary("SectionShellAttributes", true)
+        slices_group.set_attribute("SectionShellAttributes", "shell_type"   , "notype")
+        puts @inline_length
+        slices_group.set_attribute("SectionShellAttributes", "inline_length", @inline_length)
+
+        shell = SectionShell.new(slices_group, self)
+        @shells[shell.guid] = shell
 
         lpts = []
         @@bed_profile.each_with_index{ |p,i| lpts[i] = p.transform @xform_alpha}
@@ -568,22 +615,57 @@ class CurvedSection < Section
         n = 0
         while ( n < @n_section_ties )
             f = slices_group.entities.add_face( lpts)
-            f.attribute_dictionary("SliceAttrs", true)
-            f.set_attribute("SliceAttrs","index", n)
+            f.set_attribute("SliceAttributes","slice_index", n)
             lpts.each_with_index{ |p,i| rpts[i] = p.transform @xform_bed}
             rpts.each_with_index{ |p,i| lpts[i] = p}
             n += 1
         end
 
         if ( last )
-            f = slices_group.entities.add_face( lpts)
-            f.attribute_dictionary("SliceAttrs", true)
-            f.set_attribute("SliceAttrs","index", n)
+            f =slices_group.entities.add_face( lpts)
+            f.set_attribute("SliceAttributes", "slice_index", n)
         end
+        slices_group.set_attribute("SectionShellAttributes", "slice_count", n+1 )
         return slices_group
     end
 
+    def export_ordered_slices(vtxfile, tag)
+        vtxfile.puts sprintf("section %-20s %d\n",    "section_index_z", @section_index_z)
+        vtxfile.puts sprintf("section %-20s %d\n",    "shell_count",     @shells.size)
+        vtxfile.puts sprintf("section %-20s\n",    "end")
+        @shells.each_value do |s|
+            s.write_ordered_slices(vtxfile, tag)
+        end
+    end
 
-            
+    def entry_tag
+        return @entry_tag
+    end
+    def entry_tag=(etg)
+        @entry_tag = entry_tag
+        @section_group.set_attribute("SectionAttributes", "entry_tag", @entry_tag)
+    end
+    def exit_tag
+        exttg = "B"
+        if ( @entry_tag != "A" )
+            exttg = "A"
+        end
+        return exttg
+    end
+
+    def section_index_g
+        return @section_index_g
+    end
+
+    def section_index_z
+        return @section_index_z
+    end
+
+    def update_ordered_attributes(section_index_z, entry_tag)
+        @section_index_z = section_index_z
+        @entry_tag       = entry_tag
+        @section_group.set_attribute("SectionAttributes", "section_index_z", @section_index_z)
+        @section_group.set_attribute("SectionAttributes", "entry_tag", @entry_tag)
+    end
 
 end  #### End of Class CurvedSection

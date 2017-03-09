@@ -105,7 +105,7 @@ class Connector < ConnectionPoint
         section_group.entities.each do |e|
             if e.is_a? Sketchup::Group
                 if e.name == "connector"
-                    cpts[i] = Connector.factory(e)
+                    cpts[i] = Connector.factory(e, section_group)
                     i = i+1
                 end
             end
@@ -114,14 +114,14 @@ class Connector < ConnectionPoint
     end
 
     def Connector.factory(arg0,
-                          tag = "notag", 
+                          arg1 = "notag", 
                           face = nil)
         cpt = nil
         if arg0.is_a? Sketchup::Group
             if arg0.name == "section"
-                cpt = Connector.new(arg0, tag, face)
+                cpt = Connector.new(arg0, arg1, face)
             elsif arg0.name == "connector"
-                cpt = Connector.new(arg0)
+                cpt = Connector.new(arg0, arg1)
             end
             guid = cpt.guid
             @@track_connectors[guid] = cpt
@@ -137,33 +137,26 @@ class Connector < ConnectionPoint
         return @@track_connectors.values
     end
     ################################################ initialize Connector
-    def initialize( arg0 = nil, 
-                    tag = "notag", 
+    def initialize( arg0,
+                    arg1, 
                     face = nil)
 
         if Section.section_group? arg0
-#           timer = Timer.new("Connector: new")
-            @section_group    = arg0
-            @tag      = tag
+            @section_group    =arg0
+            @section     = Section.section(@section_group.guid)
+            @tag      = arg1
             @position = face_position(face)
             @normal = Geom::Vector3d.new(0,0,0) - face.normal
-            @section_guid  = arg0.guid
-            @section     = Section.section(@section_guid)
             @linked_guid = "UNCONNECTED"
             @connector_group = @section_group.entities.add_group
             @connector_group.name = "connector"
             @connector_group.layer = "track_sections"
             cname = "ConnectorAttributes"
             @connector_group.attribute_dictionary(cname, true)
-#           timer = Timer.new("Connector: new")
-            @connector_group.set_attribute(cname, "tag", tag)
-#           puts timer.elapsed
-            @connector_group.set_attribute(cname, 
-                                            "section_guid",
-                                            @section_guid)
-            @connector_group.set_attribute(cname, 
-                                            "linked_guid",
-                                            @linked_guid)
+            @connector_group.set_attribute(cname, "tag",         @tag)
+            @connector_group.set_attribute(cname, "linked_guid", @linked_guid)
+            @connector_group.set_attribute(cname, "section_index_g", @section.section_index_g)
+            ##################### Note section_index_g is used only for info in model dumps
             pts = []
             i   = 0
             face.vertices.each do |v|
@@ -171,7 +164,6 @@ class Connector < ConnectionPoint
                 i = i + 1
             end
             @face = @connector_group.entities.add_face(pts)
-#           print_face(@connector_group, @tag)
 
         elsif (arg0.is_a? Sketchup::Group) && arg0.name == "connector"
             arg0.entities.each do |c|
@@ -181,14 +173,12 @@ class Connector < ConnectionPoint
                     @face = c
                 end
             end
+            @section_group    = arg1
+            @section      = Section.section(@section_group.guid)
             cname = "ConnectorAttributes"
             @tag          = arg0.get_attribute(cname ,"tag")
-            @section_guid   = arg0.get_attribute(cname, "section_guid")
-            @section      = Section.section(@section_guid)
             @linked_guid = arg0.get_attribute(cname, "linked_guid")
-            @section_group    = @section.section_group
             @connector_group = arg0
-#           print_face(@connector_group, @tag)
         end
 
         x = @normal.x
@@ -325,17 +315,21 @@ class Connector < ConnectionPoint
     end
 
     def name
-        nm = "S#{@section.section_index}-#{@tag}"
+        nm = "S#{@section.section_index_g}-#{@tag}"
         #puts nm
         return nm
     end
 
     def section_guid 
-        return @section_guid
+        return @section.guid
     end
 
     def parent_section
         return @section
+    end
+    def parent_section=(section)
+        @section       = section
+        @section_group = section.section_group
     end
 
     def linked_guid
@@ -373,7 +367,8 @@ class Connector < ConnectionPoint
     end
 
     def break_connection_link
-        cpt = Connector.connector(linked_guid)
+        cpt = Connector.connector(@linked_guid)
+        puts "Connector.break_connection_link, #{cpt.linked_guid}, #{self.linked_guid}"
         cpt.linked_guid= "UNCONNECTED"
         self.linked_guid    = "UNCONNECTED"
     end
@@ -436,9 +431,9 @@ class Connector < ConnectionPoint
             n += 1
         end
         stab+"Connector: guid #{self.guid},  " +
-                             "tag=#{@section.section_index} #{@tag} \n" + 
+                             "tag=#{@section.section_index_g} #{@tag} \n" + 
           stab+"\tposition     (#{x.to_s},#{y.to_s},#{z.to_s}), theta #{a} \n" +
           stab+"\tlinked_guid  #{@linked_guid} \n" +
-          stab+"\tsection_guid #{@section_guid} \n"
+          stab+"\tsection_guid #{@section.guid} \n"
     end
 end

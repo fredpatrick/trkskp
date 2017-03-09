@@ -49,14 +49,14 @@ module TrackTools
 
 $trkdir = "/Users/fredpatrick/wrk/trkskp"
 puts $trkdir
-#require "#{$trkdir}/tracktool.rb"
 require "#{$trkdir}/addsections.rb"
-require "#{$trkdir}/zonetool.rb"
-require "#{$trkdir}/trackedittool.rb"
+require "#{$trkdir}/editsections.rb"
+require "#{$trkdir}/editnames.rb"
 require "#{$trkdir}/infotool.rb"
 require "#{$trkdir}/testtool.rb"
-require "#{$trkdir}/gates.rb"
-require "#{$trkdir}/switch.rb"
+#require "#{$trkdir}/gates.rb"
+require "#{$trkdir}/switches.rb"
+require "#{$trkdir}/zone.rb"
 
 def TrackTools.tracktools_init(tool_classname)
     model = Sketchup.active_model
@@ -88,11 +88,10 @@ def TrackTools.tracktools_init(tool_classname)
     #rendering_options.each_pair { |key, value| $logfile.puts "#{key} : #{value}" }
     TrackTools.model_summary
     $logfile.flush
-    Sections.load_sections       # the order of the following 4 calls is important
+    $zones    = Zones.new
+    $zones.load_existing_zones
+    $switches = Switches.new
     Section.connect_sections
-    Gates.load_gates
-    Zones.load_zones
-    Switches.load_switches
     $track_loaded = true
     vmenu = UI.menu("View")
     vmenu.set_validation_proc($view_zones_id) { MF_ENABLED }
@@ -156,83 +155,55 @@ if( not $draw_tracktool_build_loaded )
     $draw_tracktool_build_loaded = true
 end
 
+if( not $draw_track_editsections_loaded )
+    $draw_submenu_track.add_item("Edit Sections") {
+        Sketchup.active_model.select_tool EditSections.new
+    }
+    $draw_track_editsections_loaded = true
+end
+
+if( not $draw_track_editnames )
+    $draw_submenu_track.add_item("Edit Names") {
+        Sketchup.active_model.select_tool EditNames.new
+    }
+    $draw_track_editnames_loaded = true
+end
+
+if( not $draw_tracktool_updatelayoutdata_loaded )
+    $draw_submenu_track.add_separator
+    $draw_submenu_track.add_item("Update Layout Data") {
+        Sketchup.active_model.select_tool UpdateLayoutData.new
+    }
+    $draw_tracktool_updatelayoutdata_loaded = true
+end
+
+if( not $draw_tracktool_exportlayoutdata_loaded )
+    $draw_submenu_track.add_separator
+    $draw_submenu_track.add_item("Export Layout Data") {
+        Sketchup.active_model.select_tool ExportLayoutData.new
+    }
+    $draw_tracktool_exportlayoutdata_loaded = true
+end
+
+if( not $draw_tracktool_export_layout_report_loaded )
+    $draw_submenu_track.add_item("Export Layout Report") {
+        Sketchup.active_model.select_tool ExportLayoutReport.new
+    }
+    $draw_tracktool_export__layout_report_loaded = true
+end
+
 if( not $draw_tracktool_inventory_loaded)
     $draw_submenu_track.add_item("Inventory") {
         Sketchup.active_model.select_tool Inventory.new
     }
-    $draw_submenu_track.add_separator
     $draw_tracktool_inventory_loaded = true
 end
-
-if( not $draw_tracktool_zones_loaded )
-    $draw_submenu_track.add_item("Zones") {
-        Sketchup.active_model.select_tool ZoneTool.new
-    }
-    $draw_tracktool_zones_loaded = true
-end
-
-if( not $draw_tracktool_export_zones_report_loaded )
-    $draw_submenu_track.add_item("ExportZoneReport") {
-        Sketchup.active_model.select_tool ExportZoneReport.new
-    }
-    $draw_submenu_track.add_separator
-    $draw_tracktool_export__zones_report_loaded = true
-end
-
-if( not $draw_tracktool_addvertexdata_loaded )
-    $draw_submenu_track.add_item("AddVertexData") {
-        Sketchup.active_model.select_tool AddVertexData.new
-    }
-    $draw_tracktool_addvertexdata_loaded = true
-end
-
-if( not $draw_tracktool_exportvertexdata_loaded )
-    $draw_submenu_track.add_item("ExportVertexData") {
-        Sketchup.active_model.select_tool ExportVertexData.new
-    }
-    $draw_tracktool_exportvertexdata_loaded = true
-end
-
-if( not $draw_tracktool_deletevertexdata_loaded )
-    $draw_submenu_track.add_item("DeleteVertexData") {
-        Sketchup.active_model.select_tool DeleteVertexData.new
-    }
-    $draw_tracktool_deletevertexdata_loaded = true
-end
-
-if( not $draw_tracktool_test_loaded )
-    $draw_submenu_track.add_item("TestReport") {
-        Sketchup.active_model.select_tool ZoneTool.testreport
-    }
-    $draw_tracktool_test_loaded = true
-end
-
-
-#if( not $draw_tracktool_edit_loaded)
-#    $draw_submenu_track.add_item("Edit") {
-#        Sketchup.active_model.select_tool TrackEditTool.new
-#    }
-#    $draw_tracktool_edit_loaded= true
-#end
-#
-#if( not $draw_tracktool_info_loaded )
-###    $draw_submenu_track.add_item("Info") {
-#        Sketchup.active_model.select_tool InfoTool.new
-#    }
-#    $draw_tracktool_info_loaded = true
-#end
-#if( not $draw_testtool_loaded )
-#    dmenu = UI.menu("Draw")
-#    $draw_submenu_testtool = dmenu.add_item("TestTool") {
-#        Sketchup.active_model.select_tool TestTool.new
-#    }
-#    $draw_testtool_loaded = true
 
 if ( not $view_zones_loaded )
     vmenu = UI.menu("View")
     vmenu.add_separator
     $view_zones_id = vmenu.add_item("Zones") {
-        Zones.toggle_visibility
+        $zones.toggle_visibility
     }
     vmenu.set_validation_proc($view_zones_id) { MF_GRAYED}
     $view_zones_loaded = true

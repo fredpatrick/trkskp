@@ -42,6 +42,7 @@
  # 
  #
 
+require 'sketchup.rb'
 require 'langhandler.rb'
 $exStrings = LanguageHandler.new("track.strings")
 
@@ -49,46 +50,8 @@ require "#{$trkdir}/connectionpoint.rb"
 
 include Math
 
-class Sections
-
-    ###############################################################
-    ##################################### Sections.load_sections
-    def Sections.load_sections
-        Section.init_class_variables
-        Connector.init_class_variables
-        $logfile.puts "Begin load_sections"
-        @@sections_group = nil
-        Sketchup.active_model.entities.each do |e|
-            if e.is_a? Sketchup::Group
-                if e.name == "sections"
-                    @@sections_group = e
-                    break
-                end
-            end
-        end
-
-        if @@sections_group.nil?
-            $logfile.puts "Creating new sections_group"
-            @@sections_group = Sketchup.active_model.entities.add_group
-            @@sections_group.name = "sections"
-        else
-            $logfile.puts "Loading sections_group"
-            @@sections_group.entities.each do |s|
-                if Section.section_group? (s)
-                    section = Section.factory(s, "")
-                end
-            end
-        end
-        $logfile.puts "End load_sections"
-    end
-
-    def Sections.sections_group
-        return @@sections_group
-    end
-
-end # end of class Sectiuons
-
 class Section
+    require "#{$trkdir}/sectionshell.rb"
     require "#{$trkdir}/curvedsection.rb"
     require "#{$trkdir}/straightsection.rb"
     require "#{$trkdir}/switchsection.rb"
@@ -171,7 +134,7 @@ class Section
     end
     def Section.get_class_defaults
         puts "get_class_defaults"
-        dname = "TrackDefaults"
+        dname = "SectionBuildDefaults"
         model = Sketchup.active_model
         tdflts = model.attribute_dictionary(dname, true)
         @@dcode    = model.get_attribute(dname, "dcode",   "O72")
@@ -182,7 +145,7 @@ class Section
     end
     def Section.set_class_defaults
         puts "set_class_defaults"
-        dname = "TrackDefaults"
+        dname = "SectionBuildDefaults"
         model = Sketchup.active_model
         tdflts = model.attribute_dictionary(dname)
         puts tdflts.name
@@ -195,38 +158,25 @@ class Section
     
     ###############################################################
     ###################################### Section.factory
-    def Section.factory (arg1, arg2)
-        $logfile.puts "Section.factory  #{arg2}"
-        type = ""
-        section_group = nil
-       new_section = false
-        sname = "SectionAttributes"
-        if arg1.is_a? Sketchup::Group
-            type = arg1.get_attribute(sname,
-                                      "type", 
-                                      "notype")
-            section_group = arg1
-        else
-            section_group = Sections.sections_group.entities.add_group
-            type = arg2
-            new_section = true
-        end
+    def Section.factory (section_group, connection_point = nil)
+        section_type = section_group.get_attribute("SectionAttributes", "section_type")
+        puts "Section.factory, section_type = #{section_type}"
         section = nil
-        if type == "curved"
+        if section_type == "curved"
             section = CurvedSection.new(section_group)
-        elsif type == "straight"
+        elsif section_type == "straight"
             section = StraightSection.new(section_group)
-        elsif type == "switch"
+        elsif section_type == "switch"
             section = SwitchSection.new(section_group)
         end
         @@track_sections[section.guid] = section
-        if new_section
+        if ( !connection_point.nil? )
             $logfile.puts "section.factory-new_section begin"
-            section_group.attribute_dictionary(sname,true)
+            section_group.attribute_dictionary("SectionAttributes",true)
+            section_index_g = @@section_count
             @@section_count += 1
-            @@model.set_attribute("TrackAttributes", "section_count", @@section_count)
-            section_group.set_attribute(sname,"section_index", @@section_count)
-            if !section.build_sketchup_section(arg1)
+            @@model.set_attribute("TrackAttributes","section_count", @@section_count)        
+            if !section.build_sketchup_section(connection_point, section_index_g)
                 $logfile.puts "section_factory erase section_group"
                 @@track_sections.delete section.guid
                 section_group.erase!
@@ -237,9 +187,8 @@ class Section
             TrackTools.model_summary
         else
             section.load_sketchup_group
-            section.connection_pts= Connector.load_connectors(section_group)
+            section.connectors= Connector.load_connectors(section_group)
         end
-        
         $logfile.puts section.to_s
         $logfile.flush
         return  section
@@ -253,30 +202,43 @@ class Section
         section_group.erase!
         $logfile.flush
     end
+    def Section.remove_section_entry(guid)
+        @@track_sections.delete guid
+    end
 
     ###############################################################
     #################################################### initialize
 
     def initialize( section_group)
-        @section_group = section_group
+        @section_group   = section_group
+        @section_type    = section_group.get_attribute("SectionAttributes", "section_type")
+        @section_index_z = section_group.get_attribute("SectionAttributes", "section_index_g")
         sname = "SectionAttributes"
         sattrs = section_group.attribute_dictionary(sname)
         if !sattrs                       # if no dictionary this is new section_group
             section_group.attribute_dictionary(sname, true)
             section_group.name = "section"
-            @entry_tag = "U"
-            @exit_tag  = "U"
         else                             # this is existiong section_group
-            @zone_name     = @section_group.get_attribute(sname, "zone_name", "")
-            @zone_index    = @section_group.get_attribute(sname, "zone_index", 9999)
-            @entry_tag     = @section_group.get_attribute(sname, "entry_tag", "U")
-            @exit_tag      = @section_group.get_attribute(sname, "exit_tag", "U")
-            @section_index = @section_group.get_attribute(sname, "section_index")
+            @shells          = Hash.new
+            @section_group.entities.each do |e|
+                if ( e.is_a? Sketchup::Group )
+                    if ( e.name == "slices" )
+                        type = e.get_attribute("SectionShellAttributes", "shell_type")
+                        shell = SectionShell.new(e, self)
+                        @shells[shell.guid] = shell
+                    elsif ( e.name == "outline" )
+                        @outline_group = e
+                    elsif ( e.name == "outline_text" )
+                        @outline_text_group = e
+                    end
+                end
+            end
         end
     end
 
     def Section.connect_sections
         $logfile.puts "Begin Section.connect_sections"
+        Section.list_sections
         uclist = []
         nuc = 0
         Section.sections.each do |s|
@@ -292,7 +254,7 @@ class Section
                 end
             end
         end
-        $logfile.puts "Tracktool:There are #{nuc} unconnected ConnectionPoints"
+        $logfile.puts "Section.connect_sections:There are #{nuc} unconnected ConnectionPoints"
         $logfile.flush
         uclist.each_with_index do |c,i|
             uclist[i] = nil
@@ -311,12 +273,15 @@ class Section
         Section.sections.each do |s|
             s.connectors.each do |c|
                 if !c.connected?
+                    puts "Section.connect_sections, #{nuc} connector.guid = #{c.guid}, " +
+                                "connector.tag = #{c.tag}, " +
+                                "section_index_g = #{c.parent_section.section_index_g}"
                     nuc += 1
                 end
             end
         end
-        $logfile.puts "Tracktool: Final pass #{nuc} unconnected Connectors remain"
-        puts "Tracktool: Final pass #{nuc} unconnected Connectors remain"
+        $logfile.puts "Section.connect_sections: Final pass #{nuc} unconnected Connectors remain"
+        puts "Section.connect_sections: Final pass #{nuc} unconnected Connectors remain"
     end
 
     def section_id
@@ -327,69 +292,23 @@ class Section
         return @section_group.guid
     end
 
-    def type
-        return @type
+    def section_type
+        return @section_type
     end
 
     def section_group
         return @section_group
     end
 
-    def section_index
-        return @section_index
+    def section_index_g
+        return @section_index_g
     end
 
-    def zone_name
-        return @zone_name
-    end
-
-    def zone_index
-        return @zone_index
-    end
-    
-    def entry_tag
-        if @entry_tag != "U"
-            return @entry_tag
-        else
-            return "A"
+    def update_zone_dependencies
+        if ( !@outline_text_group.nil?)
+            @outline_text_group.erase!
         end
-    end
-
-    def exit_tag
-        if @exit_tag != "U"
-            return @exit_tag
-        else
-            return "B"
-        end
-    end
-
-    def set_zone_parms (zone_name, zone_index, arg1, arg2)
-        @zone_name  = zone_name
-        @zone_index = zone_index
-        @entry_tag  = arg1
-        @exit_tag   = arg2
-        @section_group.set_attribute("SectionAttributes","zone_name", @zone_name)
-        @section_group.set_attribute("SectionAttributes","zone_index", @zone_index)
-        @section_group.set_attribute("SectionAttributes","entry_tag", @entry_tag)
-        @section_group.set_attribute("SectionAttributes","exit_tag", @exit_tag)
-    end
-
-    def reset_zone_parms
-        $logfile.puts "reset_zone_parms: #{Time.now.ctime}"
-        $logfile.puts "                  zone_name #{@zone_name} zone_index #{@zone_index} "
-        if !@text_group.nil?
-            @text_group.erase!
-            @text_group = nil
-        end
-        @zone_name = "unassigned"
-        @zone_index = 9999
-        @entry_tag  = "U"
-        @exit_tag   = "U"
-        @section_group.set_attribute("SectionAttributes","zone_name", @zone_name)
-        @section_group.set_attribute("SectionAttributes","zone_index", @zone_index)
-        @section_group.set_attribute("SectionAttributes","entry_tag", @entry_tag)
-        @section_group.set_attribute("SectionAttributes","exit_tag", @exit_tag)
-        $logfile.flush
+        @outline_text_group = outline_text_group_factory
     end
 
     def slope
@@ -400,17 +319,32 @@ class Section
         return @code
     end
 
+    def closed?
+        return @closed
+    end
+
+    def outline_visible (ov )
+        @outline_group.visible = ov
+    end
+
+    def outline_material (color)
+        @outline_group.material = color
+    end
+
     ###############################################################
     #################################################### closest_point
     def closest_point(target_pt)
+        #puts "Section.closest_point, target_pt = #{target_pt.to_s}"
        it_min = 9999
         distance_min = 9999.0
         it = 0
-        while it < @connection_pts.length
-            if !@connection_pts[it].connected?
-                distance = 
-                        target_pt.distance(@connection_pts[it].position(true))
-                p = @connection_pts[it].position(true)
+        #puts "Section.closest_point, @connectors.length = #{@connectors.length}"
+        while it < @connectors.length
+            #puts "Section.closet_point, @connectors[it].guid = #{@connectors[it].guid}"
+            if !@connectors[it].connected?
+                distance = target_pt.distance(@connectors[it].position(true))
+                #puts "Section.closest_point, distance = #{distance}"
+                p = @connectors[it].position(true)
                 if distance < distance_min
                     it_min = it
                     distance_min = distance
@@ -421,40 +355,40 @@ class Section
         if it_min == 9999 
             return nil
         else
-            return @connection_pts[it_min]
+            return @connectors[it_min]
         end
     end
 
     ###############################################################
-    ############################################## connection_pts=
-    def connection_pts=(connection_pts)
-        @cpts_h = Hash.new
-        @connection_pts = connection_pts
-        @connection_pts.each do |cpt|
-            @cpts_h[ cpt.tag ] = cpt
+    ############################################## connectors=
+    def connectors=(ctrs)
+        @connectors_h = Hash.new
+        @connectors = ctrs
+        @connectors.each do |c|
+            @connectors_h[ c.tag ] = c
         end
     end
 
     ############################################## connectors
     def connectors
-        return @connection_pts
+        return @connectors
     end
 
     ###############################################################
     ############################################## connection_point
-    def connection_pt(tag)
-        return @cpts_h[tag]
+    def connector(tag)
+        return @connectors_h[tag]
     end
 
     ###############################################################
     ############################################## reverse forward direction
     def reverse_forward_direction
-        cpt_A = @cpts_h["A"]
-        cpt_B = @cpts_h["B"]
+        cpt_A = @connectors_h["A"]
+        cpt_B = @connectors_h["B"]
         cpt_A.tag = "B"
         cpt_B.tag = "A"
-        @cpts_h["A"] = cpt_B
-        @cpts_h["B"] = cpt_A
+        @connectors_h["A"] = cpt_B
+        @connectors_h["B"] = cpt_A
         @slope = -@slope
         @section_group.set_attribute("SectionAttributes", "slope", @slope)
     end
@@ -498,10 +432,9 @@ class Section
     def to_s(ntab = 1)
         stab = ""
         1.upto(ntab) {|i| stab = stab + "\t"}
-        str = stab + "Section: guid #{guid}" + " type  #{@type} "
-        str = str + "section_index #{@section_index} \n"
-        str = str + stab +"\tzone_name     #{@zone_name} zone_index #{@zone_index} \n"
-        @connection_pts.each do |cpt|
+        str = stab + "Section: guid #{guid}" + " type  #{@section_type} "
+        str = str + "section_index_g #{@section_index_g} \n"
+        @connectors.each do |cpt|
             str = str +  cpt.to_s(ntab+1)
         end
         return str
@@ -535,19 +468,19 @@ class Section
 
     ##################################################################### Section.section_path?
     def Section.section_path? (path) 
-        if !path[0].is_a? Sketchup::Group
-            return nil
-        elsif path[0].name != "sections"
-            return nil
+
+        path.each_with_index do |e,i|
+            if ( e.is_a? Sketchup::Group )
+                #puts "Section.section_path? #{i}, e.name = #{e.name}, #{e.guid}"
+                if ( e.name == "section" )
+                    section = @@track_sections[e.guid]
+                    return section
+                end
+            else
+                return nil
+            end
         end
-        if !path[1].is_a? Sketchup::Group
-            return nil
-        elsif path[1].name != "section"
-            return nil
-        end
-        section_group = path[1]
-        section = Section.section(section_group.guid)
-        return section
+        return nil
     end
 
     def Section.switches
@@ -560,6 +493,12 @@ class Section
             end
         end
         return sws
+    end
+
+    def Section.list_sections
+        @@track_sections.each do |k,v|
+            #puts "Section.list_sections, #{v.section_index_g}, #{v.section_type}, #{v.guid}"
+        end
     end
 
     ####################################################################
@@ -648,6 +587,12 @@ class Section
         sa = sa.sort {|a,b| a[0][0] <=> b[0][0] }
         sa.each do |pair|
             puts "#{pair[0]} #{pair[1]}"
+        end
+    end
+
+    def Section.update_layout_data
+        @@track_sections.each_value do |s|
+            s.make_slices
         end
     end
 

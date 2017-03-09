@@ -52,15 +52,24 @@ class StraightSection < Section
 
     #####################################################################
     ###################################################  initialize
-    def initialize( arg)
-        @type = "straight"
+    def initialize( section_group)
+        @zone_guid = section_group.get_attribute("SectionAttributes", "zone_guid")
+        @zone      = $zones.zone(@zone_guid)
         @lens = Hash.new
         @lens["10.0"]  = [10.0,  24]
         @lens["5.0"]   = [5.0,   12]
         @lens["4.5"]   = [4.5,   11]
         @lens["1.75"]  = [1.75,  4]
         @lens["1.375"] = [1.375, 3]
-        super(arg)
+        super(section_group)
+    end
+
+    def zone
+        return @zone
+    end
+
+    def inline_length 
+        return @inline_length
     end
     ################################################# end initialize
 
@@ -68,13 +77,13 @@ class StraightSection < Section
     ############################################### load_sketchup_group
     def load_sketchup_group
         sname = "SectionAttributes"
-        @lencode    = @section_group.get_attribute(sname, "lencode")
-        @slope      = @section_group.get_attribute(sname, "slope")
-        @zone_name  = @section_group.get_attribute(sname, "zone_name")
-        @zone_index = @section_group.get_attribute(sname, "zone_index")
-        xform_bed_a = @section_group.get_attribute(sname, "xform_bed")
-        @xform_bed  = Geom::Transformation.new(xform_bed_a)
-        xform_alpha_a = @section_group.get_attribute(sname, "xform_alpha")
+        @entry_tag       = @section_group.get_attribute(sname, "entry_tag")
+        @section_index_z = @section_group.get_attribute(sname, "section_index_z")
+        @lencode         = @section_group.get_attribute(sname, "lencode")
+        @slope           = @section_group.get_attribute(sname, "slope")
+        xform_bed_a      = @section_group.get_attribute(sname, "xform_bed")
+        @xform_bed       = Geom::Transformation.new(xform_bed_a)
+        xform_alpha_a      = @section_group.get_attribute(sname, "xform_alpha")
         if xform_alpha_a.nil? # this code kludge while we add slices_group
             @xform_alpha = make_xform_alpha()
             @section_group.set_attribute(sname, "xform_alpha",  @xform_alpha.to_a)
@@ -82,6 +91,7 @@ class StraightSection < Section
             @xform_alpha  = Geom::Transformation.new(xform_alpha_a)
         end
         @code = @lencode
+        @inline_length = @lens[@lencode][0]
     end
 
     def make_xform_alpha()
@@ -93,7 +103,7 @@ class StraightSection < Section
     end
     ####################################################################
     ################################################ build_sketchup_section
-    def build_sketchup_section(target_point)
+    def build_sketchup_section(target_point, section_index_g)
         if $repeat == -1
             okflg = false
             while !okflg
@@ -124,6 +134,7 @@ class StraightSection < Section
         lngth          = @lens[@lencode][0]
         n_section_ties = @lens[@lencode][1]
         @code = @lencode
+        @inline_length = lngth
 
         dh       = @slope * lngth
         dx       = 0
@@ -139,18 +150,22 @@ class StraightSection < Section
 
 
         sname = "SectionAttributes"
-        @section_group.set_attribute(sname, "type",      "straight")
-        @section_group.set_attribute(sname, "lencode",    @lencode)
-        @section_group.set_attribute(sname, "slope",      @slope)
-        @section_group.set_attribute(sname, "xform_bed",  @xform_bed.to_a)
-        @section_group.set_attribute(sname, "zone_name",  "unassigned")
-        @section_group.set_attribute(sname, "zone_index", 9999)
+        @entry_tag        = "A"
+        @section_index_z  = 999
+        @section_group.set_attribute(sname, "section_type", "straight")
+        @section_group.set_attribute(sname, "lencode",      @lencode)
+        @section_group.set_attribute(sname, "slope",        @slope)
+        @section_group.set_attribute(sname, "xform_bed",    @xform_bed.to_a)
+        @section_index_g = section_index_g
+        @section_group.set_attribute(sname, "section_index_g", @section_index_g)
+        @section_group.set_attribute(sname, "section_index_z", @section_index_z)
+        @section_group.set_attribute(sname, "entry_tag",       @entry_tag)
 
         lpts = []
         np = @@bed_profile.length
         i = 0
         while i < np do
-            lpts[i] = @@bed_profile[i].transform @xform_alpha
+           lpts[i] = @@bed_profile[i].transform @xform_alpha
             i += 1
         end
 
@@ -202,17 +217,22 @@ class StraightSection < Section
                                            cpts)
             nr += 1
         end
-        self.connection_pts= cpts
-        section_point = connection_pt(@tag_cnnct)
+        self.connectors= cpts
+        section_point = connector(@tag_cnnct)
         tr_group = make_tr_group(target_point, section_point)
         @section_group.transformation = tr_group
         if @tag_cnnct == "A"
-            connection_pt("A").make_connection_link(target_point)
-            $current_connection_point = connection_pt("B")
+            connector("A").make_connection_link(target_point)
+            $current_connection_point = connector("B")
         else
-            connection_pt("B").make_connection_link(target_point)
-            $current_connection_point = connection_pt("A")
+            connector("B").make_connection_link(target_point)
+            $current_connection_point = connector("A")
         end
+
+        make_slices
+
+        @outline_group           = outline_group_factory
+        @outline_text_group      = outline_text_group_factory
         $logfile.puts timer.elapsed
         return true
     end
@@ -220,25 +240,17 @@ class StraightSection < Section
 
     ######################################################################
     ##################################### outline_group_factory
-    def outline_group_factory(zone_group)
+    def outline_group_factory
         timer = Timer.new("StraightSection.outline_group_factory")
-        outline_group = zone_group.entities.add_group
+        outline_group = @section_group.entities.add_group
         outline_group.material = Zone.material
         style    = Zone.style
 
         outline_group.layer = "zones"
         outline_group.name  = "outline"
         outline_group.attribute_dictionary("OutlineAttributes", true)
-        outline_group.set_attribute("OutlineAttributes", "section_guid", @section_group.guid)
-        outline_group.set_attribute("OutlineAttributes", "section_index", @section_index)
-        entry_tag = self.entry_tag
-        cpt = connection_pt(entry_tag)
-        $logfile.puts "StraightSection.build_outline_group, section #{@section_index}" +
-                          " entry_tag #{entry_tag}"
+        outline_group.set_attribute("OutlineAttributes", "section_index_g", @section_index_g)
         slope = @slope
-        if entry_tag != "A"
-            slope = -@slope
-        end
         dl        = @lens[@lencode][0]
         dh        = slope * dl
         alpha      = asin( dh /dl )
@@ -278,25 +290,17 @@ class StraightSection < Section
             }
             outline_group.entities.add_face(lpts[0], lpts[1], rpts[1], rpts[0])
         end
-        tr_group = make_tr_group(cpt)
-        outline_group.transformation = tr_group
-        outline_text_group_factory(outline_group)
 
         $logfile.puts timer.elapsed
         return outline_group
     end
 
-    def outline_text_group_factory(outline_group)
-        text_group = outline_group.entities.add_group
-        text_group.name = "text"
+    def outline_text_group_factory
+        outline_text_group = @section_group.entities.add_group
+        outline_text_group.name = "outline_text"
 
-        entry_tag = self.entry_tag
-        slope     = @slope
-        if entry_tag != "A"
-            slope = - @slope
-        end
-        char_group = text_group.entities.add_group
-        char_group.entities.add_3d_text(@zone_name, TextAlignLeft, @@ofont, @@obold, false,
+        char_group = outline_text_group.entities.add_group
+        char_group.entities.add_3d_text(@zone.zone_name, TextAlignLeft, @@ofont, @@obold, false,
                                              @@otxt_h, 0.6, 0.0, @@ofill)
         bx = char_group.bounds
         bkgrnd_w = bx.width + 1.0
@@ -304,9 +308,9 @@ class StraightSection < Section
         len_s    = @lens[@lencode][0]
         if bkgrnd_w > len_s
             char_group.entities.clear!
-            text_group.erase!
-            text_group = nil
-            return text_group
+            outline_text_group.erase!
+            outline_text_group = nil
+            return outline_text_group
         end
         xmn      = -0.5 * bkgrnd_h 
         xmx      = +0.5 * bkgrnd_h 
@@ -318,7 +322,7 @@ class StraightSection < Section
         p1   = Geom::Point3d.new(xmn, ymx, bkz)
         p2   = Geom::Point3d.new(xmx, ymx, bkz)
         p3   = Geom::Point3d.new(xmx, ymn, bkz)
-        face = text_group.entities.add_face(p0, p1, p2, p3)
+        face = outline_text_group.entities.add_face(p0, p1, p2, p3)
         face.back_material= "white"
         face.material = "white"
         face.edges.each {|e| e.hidden=true}
@@ -336,8 +340,8 @@ class StraightSection < Section
         ux    = Geom::Vector3d.new(1.0, 0.0, 0.0)
         
         xforms = Geom::Transformation.rotation(p0, ux, atan(slope) )
-        text_group.transform!  xforms
-        return text_group
+        outline_text_group.transform!  xforms
+        return outline_text_group
     end
         
 
@@ -350,7 +354,7 @@ class StraightSection < Section
         end
         lngth  = @lens[@lencode][0]
 
-        return [@type, sprintf("%5s",lngth)]
+        return [@section_type, sprintf("%5s",lngth)]
     end
 
     ######################################################################
@@ -361,9 +365,9 @@ class StraightSection < Section
 
         cpt1 = nil
         if tag == "B"
-            cpt1 = self.connection_pt("A")
+            cpt1 = self.connector("A")
         else
-            cpt1 = self.connection_pt("B")
+            cpt1 = self.connector("B")
         end
         
         info_text = "Straight " + @lencode
@@ -372,7 +376,7 @@ class StraightSection < Section
     end
 
     def tag
-        return sprintf("%s-S%04d", @zone_name, @zone_index)
+        return sprintf("%s-S%04d", @zone.zone_name, @section_index_g)
     end
 
     ######################################################################
@@ -432,16 +436,24 @@ class StraightSection < Section
     end
     #################################### end StraightSection.extend_profile
 
-    def make_slices(zone_group, last)
-        slices_group = zone_group.entities.add_group
-        slices_group.name = "slices"
-        slices_group.attribute_dictionary("SlicesAttrs", true)
-        slices_group.set_attribute("SlicesAttrs", "zone_index", @zone_index)
-        slices_group.set_attribute("SlicesAttrs", "section_guid", @section_group.guid)
+    def make_slices
+        @section_group.entities.each do |e|
+            if ( e.is_a? Sketchup::Group )
+                if ( e.name == "slices" )
+                    e.erase!
+                end
+            end
+        end
+        @shells           = Hash.new
 
-        entry_tag = self.entry_tag
-        cpt = connection_pt(entry_tag)
-        slices_group.transformation = make_tr_group(cpt)
+        last              = true
+        slices_group      = @section_group.entities.add_group
+        slices_group.name = "slices"
+        slices_group.hidden = true
+        slices_group.set_attribute("SectionShellAttributes", "shell_type",    "notype")
+        slices_group.set_attribute("SectionShellAttributes", "inline_length", @inline_length)
+        shell               = SectionShell.new(slices_group, self)
+        @shells[shell.guid] = shell
 
         lpts = []
         @@bed_profile.each_with_index{ |p,i| lpts[i] = p.transform @xform_alpha}
@@ -454,12 +466,47 @@ class StraightSection < Section
         n = 0
         while ( n < nface)
             f = slices_group.entities.add_face( lpts)
-            f.attribute_dictionary("SliceAttrs", true)
-            f.set_attribute("SliceAttrs","index", n)
+            f.set_attribute("SliceAttributes","slice_index", n)
             lpts.each_with_index{ |p,i| rpts[i] = p.transform @xform_bed}
             rpts.each_with_index{ |p,i| lpts[i] = p}
             n += 1
         end
+        slices_group.set_attribute("SectionShellAttributes", "slice_count", n)
         return slices_group
+    end
+
+    def export_ordered_slices(vtxfile, tag)
+        vtxfile.puts sprintf("section %-20s %d\n",    "section_index_z", @section_index_z)
+        vtxfile.puts sprintf("section %-20s %d\n",    "shell_count", @shells.size)
+        vtxfile.puts sprintf("section %-20s\n",    "end")
+        @shells.each_value do |s|
+            s.write_ordered_slices(vtxfile, tag)
+        end
+    end
+
+    def entry_tag
+        return @entry_tag
+    end
+    def entry_tag=(etg)
+        @entry_tag = entry_tag
+        @section_group.set_attribute("SectionAttributes", "entry_tag", @entry_tag)
+    end
+    def exit_tag
+        exttg = "B"
+        if ( @entry_tag != "A" )
+            exttg = "A"
+        end
+        return exttg
+    end
+
+    def section_index_z
+        return @section_index_z
+    end
+
+    def update_ordered_attributes(section_index_z, entry_tag)
+        @section_index_z = section_index_z
+        @entry_tag       = entry_tag
+        @section_group.set_attribute("SectionAttributes", "section_index_z", @section_index_z)
+        @section_group.set_attribute("SectionAttributes", "entry_tag", @entry_tag)
     end
 end  # end of Class StraightSection

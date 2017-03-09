@@ -45,6 +45,8 @@
 require 'sketchup.rb'
 require 'langhandler.rb'
 require "#{$trkdir}/section.rb"
+require "#{$trkdir}/zone.rb"
+require "#{$trkdir}/switches.rb"
 
 $exStrings = LanguageHandler.new("track.strings")
 
@@ -74,10 +76,11 @@ class AddSections
             UI.messagebox("Couldnt get cursor_path")
             return
         end 
-        @ip_xform = Sections.sections_group.transformation.clone
+        @ip_xform = $zones.zones_group.transformation.clone
         @ip_xform.invert!
 
         @cursor_id = @cursor_looking
+        define_onRButtonDown
         @istate = 0 
     end
 
@@ -91,6 +94,10 @@ class AddSections
     def activate
         $logfile.puts "############################# activate AddSections #{Time.now.ctime}"
         puts          "############################# activate AddSections #{Time.now.ctime}"
+        Section.get_class_defaults
+        puts "AddSections.activate, SectionBuildDefaults"
+        track_attributes = Sketchup.active_model.attribute_dictionary("SectionBuildDefaults")
+        track_attributes.each_pair { |k, v| puts "\t #{k}    #{v}" }
         @ip = Sketchup::InputPoint.new
         @menu_flg = false
         @ptLast = Geom::Point3d.new 1000, 1000, 1000
@@ -105,6 +112,8 @@ class AddSections
         $logfile.flush
         view.invalidate if @drawn
         Section.set_class_defaults
+        track_attributes = Sketchup.active_model.attribute_dictionary("SectionBuildDefaults")
+        track_attributes.each_pair { |k, v| puts "\t #{k}    #{v}" }
     end
 
     def onMouseMove( flags, x, y, view)
@@ -118,7 +127,13 @@ class AddSections
             cpt = nil
             if section
                 tposition = @ip_xform * @ip.position
+                #puts "AddSection.onMouseMove, tposition = #{tposition.to_s}"
                 cpt = section.closest_point(tposition)
+                if cpt.nil?
+                    #puts "AddSections.onMouseMove, closest_point returned nil"
+                else
+                    #puts cpt.to_s
+                end
             else
                 cpt = look_for_intersection(@ph)
             end
@@ -127,11 +142,14 @@ class AddSections
                     undef getMenu
                     @cursor_id = @cursor_looking
                     @menu_flg = false
+                    define_onRButtonDown
                 end
             else
                 $current_connection_point = cpt
+                #puts "AddSections.onMouseMove, current_connection_point,menuflg = #{@menu_flg}"
                 @cursor_id = @cursor_on_target
                 if @menu_flg == false
+                    undef onRButtonDown
                     make_context_menu
                     @menu_flg = true
                 end
@@ -140,6 +158,7 @@ class AddSections
             if @menu_flg == true
                 undef getMenu
                 @cursor_id = @cursor_looking
+                define_onRButtonDown
                 @menu_flg = false
             end
         end
@@ -193,23 +212,33 @@ class AddSections
                 puts "onMouseMove-Close, deactivating conext menu"
                 undef getMenu
                 @cursor_id = @cursor_looking
+                define_onRButtonDown
                 @menu_flg = false
             }
         end
     end
 
-    def build_section(type)
+    def build_section(new_section_type)
+        ccpt = $current_connection_point
+        puts "AddSections.build_section,####################################################" +
+                       "#  #{new_section_type}"
+        current_zone = $zones.get_zone($current_connection_point, new_section_type)
+        if ( new_section_type == "switch" )
+            parent = $switches
+        else
+            parent = current_zone
+        end
         $repeat = -1
+        new_section = nil
         while $repeat != 0
-            $logfile.puts "tracktool.build_section, type = #{type}"
+            $logfile.puts "tracktool.build_section, new_section_type = #{new_section_type}"
             TrackTools.model_summary
-            s = Section.factory($current_connection_point, 
-                            type)
-            if s.nil?
+            new_section = parent.add_section($current_connection_point, new_section_type)
+            if new_section.nil?
                 break
             end
             if $current_connection_point.guid != ""
-                @info_data = s.info($current_connection_point)
+                @info_data = new_section.info($current_connection_point)
                 @info_flg  = true
             else
                 @info_flg = false
@@ -217,10 +246,88 @@ class AddSections
             $repeat = $repeat - 1
             @ph.view.refresh
         end
+        puts current_zone.to_s("section(s) added")
+        if ( new_section.nil? )
+            if ( current_zone.section_count == 0 ) 
+                $zones.delete_zone(current_zone.guid)
+            end
+            return nil               
+        end
+        puts "AddSections.build_section #################### #{new_section_type}"
+        if ( new_section_type == "switch" && !current_zone.nil? )
+            puts "Addsections.build_section, $current_connection_point.guid = "+
+               "#{ccpt.guid}, #{ccpt.tag}"
+            current_zone.end_zone(new_section, 
+                                  ccpt.linked_connector.tag)
+            puts current_zone.to_s("after end_zone-1")
+        end
+        new_section.connectors.each do |c|
+            if ( !c.connected? )
+                found_connector = $zones.look_for_connection(c)
+                if ( !found_connector.nil? )
+                    found_section = found_connector.parent_section
+                    found_tag     = found_connector.tag
+                    puts "Addsections.build_section, found connected section," +
+                                 "type = #{found_connector.parent_section.section_type}"
+                    if ( new_section.section_type == "switch" )
+                        if ( found_section.section_type != "switch" )
+                            found_zone = found_section.zone
+                            found_zone.end_zone(new_section, found_connector.tag)
+                            puts found_zone.to_s("after_end_zone-3")
+                        end
+                    else
+                        if ( found_connector.parent_section.section_type == "switch" )
+                            current_zone.end_zone(found_connector.parent_section, 
+                                                  found_connector.tag)
+                            puts current_zone.to_s("after end_zone-2")
+                        else
+                            zoneb = found_connector.parent_section.zone
+                            if ( current_zone.guid != zoneb.guid)
+                                current_zone.merge_zone(zoneb)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if ( !current_zone.nil? )
+            current_zone.traverse_zone
+        end
+            
         @istate = 0
         @cursor_id = @cursor_looking
-        undef getMenu
-        @menu_flg = false
+        if @menu_flg
+            undef getMenu
+            @menu_flg = false
+            define_onRButtonDown
+        end
+    end
+
+    def create_start_point
+        prompts = [$exStrings.GetString("X"),
+                   $exStrings.GetString("Y"),
+                   $exStrings.GetString("Z"),
+                   $exStrings.GetString("Azimuth"),
+                   $exStrings.GetString("section_type")]
+        values = [0.0, 0.0, 0.0, 0.0, ""]
+        tlist  = ["",  "",  "",  "",  "curved|straight|switch"]
+        title  = "StartPoint"
+        results = inputbox(prompts, values, tlist, title)
+        if ( not results ) then return end 
+        x, y, z, azimuth, new_section_type = results
+        pt     = Geom::Point3d.new(x, y, z)
+        theta  = azimuth * 180.0 / PI
+        normal = Geom::Point3d.new(cos(theta), sin(theta), 0.0 )
+        $current_connection_point = StartPoint.new(pt, normal)
+        build_section(new_section_type)
+        @cursor_id = @cursor_looking
+    end
+
+    def define_onRButtonDown
+        #puts "define_onRButtonDown"
+        def onRButtonDown(flags, x, y, view)
+            create_start_point
+        end
     end
 end #end of Class AddSections
 ######################################################################### class Inventory

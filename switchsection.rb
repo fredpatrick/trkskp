@@ -53,7 +53,7 @@ class SwitchSection < Section
     ##################################################################
     ############################################# initialize
     def initialize( arg)
-        @type = "switch"
+        @section_type = "switch"
         @parms = Hash.new
         @parms["O72"] = [36.0, 15.625, 37, 22.5, 34, 1.3125,  8]
         @parms["O60"] = [30.0, 14.50,  35, 22.5, 28, 0.0,   18]
@@ -67,14 +67,14 @@ class SwitchSection < Section
     ###################################### load_sketchup_group
     def load_sketchup_group
         sname = "SectionAttributes"
-        @dcode          = @section_group.get_attribute(sname, "diameter_code")
-        @arctyp         = @section_group.get_attribute(sname, "arc_type")
-        @slope          = @section_group.get_attribute(sname, "slope")
-        @direc          = @section_group.get_attribute(sname, "direction")
-        xform_bed_a     = @section_group.get_attribute(sname, "xform_bed")
-        @xform_bed      = Geom::Transformation.new(xform_bed_a )
-        xform_bed_arc_a = @section_group.get_attribute(sname, "xform_bed_arc")
-        @xform_bed_arc  = Geom::Transformation.new(xform_bed_arc_a )
+        @dcode           = @section_group.get_attribute(sname, "diameter_code")
+        @arctyp          = @section_group.get_attribute(sname, "arc_type")
+        @slope           = @section_group.get_attribute(sname, "slope")
+        @direc           = @section_group.get_attribute(sname, "direction")
+        xform_bed_a      = @section_group.get_attribute(sname, "xform_bed")
+        @xform_bed       = Geom::Transformation.new(xform_bed_a )
+        xform_bed_arc_a  = @section_group.get_attribute(sname, "xform_bed_arc")
+        @xform_bed_arc   = Geom::Transformation.new(xform_bed_arc_a )
         xform_alpha_a = @section_group.get_attribute(sname, "xform_alpha")
         if xform_alpha_a.nil? # this code kludge while we add slices_group
             @xform_alpha = make_xform_alpha()
@@ -83,13 +83,27 @@ class SwitchSection < Section
             @xform_alpha  = Geom::Transformation.new(xform_alpha_a)
         end
         @switch_index = @section_group.get_attribute(sname, "switch_index")
-        if @switch_index.nil?
-            @switch_index = @@switch_count
-            @section_group.set_attribute(sname, "switch_index",  @switch_index)
-            @@switch_count += 1
-            @@model.set_attribute("TrackAttributes", "switch_count", @@switch_count)
-        end
+        @switch_name  = @section_group.get_attribute(sname, "switch_name")
         @code = @dcode
+        @thru_length  = @parms[@dcode][1]
+        radius         = @parms[@dcode][0]
+        @out_length   = radius * @parms[@dcode][3]  * Math::PI / 180.0
+        @n_ties_arc   = @parms[@dcode][4]
+    end
+
+    def switch_index
+        return @switch_index
+    end
+
+    def switch_name
+        return @switch_name
+    end
+
+    def switch_name= (swnm)
+        @switch_name = swnm
+        @section_group.set_attribute("SectionAttributes", "switch_name", @switch_name)
+        @outline_text_group.erase!
+        @outline_text_group = outline_text_group_factory
     end
 
     def make_xform_alpha()
@@ -101,7 +115,7 @@ class SwitchSection < Section
     end
     ###################################################################
     ####################################### build_sketchup_section
-    def build_sketchup_section(target_point)
+    def build_sketchup_section(target_point, section_index_g)
         if $repeat == -1
             okflg = false
             while !okflg
@@ -138,13 +152,13 @@ class SwitchSection < Section
         len_straight    = @parms[@dcode][1]
         n_ties_straight = @parms[@dcode][2]
         len_arc         = @parms[@dcode][3]
-        n_ties_arc      = @parms[@dcode][4]
+        @n_ties_arc      = @parms[@dcode][4]
         a               = @parms[@dcode][5]
         first_tie       = @parms[@dcode][6]
 
         arclen   = len_arc * Math::PI / 180.0
-        delta    = arclen / n_ties_arc
-        dh_arc   = @slope * radius * arclen / n_ties_arc
+        delta    = arclen / @n_ties_arc
+        dh_arc   = @slope * radius * arclen / @n_ties_arc
         dl_arc   = radius * sin(delta)
         vt_arc   = Geom::Vector3d.new 0,  0,  dh_arc
         uz       = Geom::Vector3d.new 0,  0,  1
@@ -157,13 +171,16 @@ class SwitchSection < Section
         tr_vt_arc  = Geom::Transformation.translation( vt_arc )
         @xform_bed_arc =  tr_vt_arc * t1
 
-        dh              = @slope * a
-        dx              = 0
-        dl              = a
-        alpha           = asin( dh /dl )
-        vt              = Geom::Vector3d.new 0,  dl, dh
-        @xform_bed_alen = Geom::Transformation.translation( vt )
-
+        if ( a != 0.0 ) 
+            dh              = @slope * a
+            dx              = 0
+            dl              = a
+            alpha           = asin( dh /dl )
+            vt              = Geom::Vector3d.new 0,  dl, dh
+            @xform_bed_alen = Geom::Transformation.translation( vt )
+        else
+            @xform_bed_alen = nil
+        end
 
         dh           = @slope * len_straight
         dx           = 0
@@ -176,9 +193,11 @@ class SwitchSection < Section
         ux           = Geom::Vector3d.new 1, 0, 0
         p0           = Geom::Point3d.new  0,  0,  0
         @xform_alpha     = Geom::Transformation.rotation p0, ux, alpha
+        @thru_length = @parms[@dcode][1]
+        @out_length  = radius * @parms[@dcode][3] * Math::PI / 180.0
 
         sname = "SectionAttributes"
-        @section_group.set_attribute(sname, "type",          "switch")
+        @section_group.set_attribute(sname, "section_type",  "switch")
         @section_group.set_attribute(sname, "diameter_code", @dcode)
         @section_group.set_attribute(sname, "slope",         @slope)
         @section_group.set_attribute(sname, "direction",     @direc)
@@ -186,10 +205,12 @@ class SwitchSection < Section
         @section_group.set_attribute(sname, "xform_bed_arc", @xform_bed_arc.to_a)
         @switch_index = @@switch_count
         @section_group.set_attribute(sname, "switch_index",  @switch_index)
+        @switch_name = sprintf("SW%03d", @switch_index)
+        @section_group.set_attribute(sname, "switch_name",  @switch_name)
         @@switch_count += 1
         @@model.set_attribute("TrackAttributes", "switch_count", @@switch_count)
-        @section_group.set_attribute(sname,"switch_index",  @@switch_count)
-
+        @section_index_g = section_index_g
+        @section_group.set_attribute(sname, "section_index_g",  @section_index_g)
         lpts = []
         np = @@bed_profile.length
         i = 0
@@ -217,7 +238,7 @@ class SwitchSection < Section
         p0 = p0 + [0.0, a, 0.0]
         p2 = p2 + [0.0, a, 0.0]
         n  = 0
-        while n < n_ties_arc
+        while n < @n_ties_arc
             q0 = p0.transform @xform_bed_arc
             q2 = p2.transform @xform_bed_arc
             footprnt_group.entities.add_edges(p0, q0)
@@ -270,7 +291,7 @@ class SwitchSection < Section
             i += 1
         end
         rpts = CurvedSection.extend_profile(section_group, body_group,
-                                            n_ties_arc,
+                                            @n_ties_arc,
                                             kpts,
                                             @xform_bed_arc,
                                             @@bed_mat,
@@ -293,7 +314,7 @@ class SwitchSection < Section
                 i += 1
             end
             CurvedSection.extend_profile(section_group, body_group,
-                                         n_ties_arc,
+                                         @n_ties_arc,
                                          kpts,
                                          @xform_bed_arc,
                                          @@rail_mat, 
@@ -302,42 +323,45 @@ class SwitchSection < Section
             nr += 1
         end
 
-        self.connection_pts = cpts                                    
-        section_point = connection_pt(@tag_cnnct)
+        self.connectors = cpts                                    
+        section_point = connector(@tag_cnnct)
         tr_group = make_tr_group(target_point,section_point)
         @section_group.transformation = tr_group
 
         if @tag_cnnct == "A"
-            connection_pt("A").make_connection_link(target_point)
-            $current_connection_point = connection_pt("B")
+            connector("A").make_connection_link(target_point)
+            $current_connection_point = connector("B")
         elsif @tag_cnnct =="B"
-            connection_pt("B").make_connection_link(target_point)
-            $current_connection_point = connection_pt("A")
+            connector("B").make_connection_link(target_point)
+            $current_connection_point = connector("A")
         elsif @tag_cnnct == "C"
-            connection_pt("C").make_connection_link(target_point)
-            $current_connection_point = connection_pt("A")
+            connector("C").make_connection_link(target_point)
+            $current_connection_point = connector("A")
         end
+        make_slices
+        @outline_group         = outline_group_factory
+        @outline_text_group    = outline_text_group_factory
         $logfile.puts timer.elapsed
         return true
     end
     ############################################ end build_section
 
-    def outline_group_factory(gates_group)
+    def outline_group_factory
         timer = Timer.new("SwitchSection.outline_group_factory")
-        outline_group = gates_group.entities.add_group
-        material = Gates.switch_material
-        style    = Gates.switch_style
+        outline_group = @section_group.entities.add_group
+        material = Switches.switch_material
+        style    = Switches.switch_style
 
-        n_ties_arc   = @parms[@dcode][4]
+        @n_ties_arc   = @parms[@dcode][4]
         a            = @parms[@dcode][5]
 
         outline_group.layer = "zones"
         outline_group.name  = "outline"
         outline_group.attribute_dictionary("OutlineAttributes", true)
         outline_group.set_attribute("OutlineAttributes", "section_guid", @section_group.guid)
-        outline_group.transformation= @section_group.transformation
+        #outline_group.transformation= @section_group.transformation
 
-        cpt = connection_pt("A")
+        cpt = connector("A")
         face_pts = cpt.face_points
         ic     = face_pts[1]
         center = face_pts[0][ic]
@@ -376,7 +400,7 @@ class SwitchSection < Section
         offset = Geom::Vector3d.new(0.0, a, a * @slope)
         np.times { |i| lpts[i] = lpts[i] + offset }
         if style == "faces"
-            n_ties_arc.times { |n|
+            @n_ties_arc.times { |n|
                 lpts.each_with_index {|p,i| rpts[i] = p.transform @xform_bed}
                 Section.add_faces(outline_group.entities, lpts, rpts, material)
                 rpts.each_with_index {|p,i| lpts[i] = p }
@@ -385,7 +409,7 @@ class SwitchSection < Section
             np.times { |i|
                 edges = outline_group.entities.add_edges(lpts[i-1],lpts[i])
             }
-            n_ties_arc.times { |n|
+            @n_ties_arc.times { |n|
                 lpts.each_with_index {|p,i| rpts[i] = p.transform @xform_bed_arc}
                 np.times { |i|
                     edges = outline_group.entities.add_edges(rpts[i], lpts[i])
@@ -397,17 +421,16 @@ class SwitchSection < Section
                 edges = outline_group.entities.add_edges(rpts[i-1],rpts[i])
             }
         end
-        outline_text_group_factory(outline_group)
         $logfile.puts timer.elapsed
         return outline_group
     end
 
-    def outline_text_group_factory(outline_group)
-        text_group = outline_group.entities.add_group
-        text_group.name = "text"
+    def outline_text_group_factory
+        outline_text_group = @section_group.entities.add_group
+        outline_text_group.name = "outline_text"
 
-        char_group = text_group.entities.add_group
-        char_group.entities.add_3d_text(self.label, TextAlignLeft, @@ofont, @@obold, false,
+        char_group = outline_text_group.entities.add_group
+        char_group.entities.add_3d_text(@switch_name, TextAlignLeft, @@ofont, @@obold, false,
                                              @@otxt_h, 0.6, 0.0, @@ofill)
         bx = char_group.bounds
         bkgrnd_w = bx.width + 1.0
@@ -423,7 +446,7 @@ class SwitchSection < Section
         p1   = Geom::Point3d.new(xmn, ymx, bkz)
         p2   = Geom::Point3d.new(xmx, ymx, bkz)
         p3   = Geom::Point3d.new(xmx, ymn, bkz)
-        face = text_group.entities.add_face(p0, p1, p2, p3)
+        face = outline_text_group.entities.add_face(p0, p1, p2, p3)
         face.material = "white"
         face.back_material = "white"
         face.edges.each {|e| e.hidden=true}
@@ -439,16 +462,17 @@ class SwitchSection < Section
         char_group.transform! xform
         char_entities = char_group.explode
         ux    = Geom::Vector3d.new(1.0, 0.0, 0.0)
-        pt    = connection_pt("C").position
+        pt    = connector("C").position
         slope = pt.z / pt.y
         xform = Geom::Transformation.rotation(p0, ux, atan(slope) )
-        text_group.transform! xform
+        outline_text_group.transform! xform
+        return outline_text_group
     end
 
     ######################################################################
     ###################################### Report
     def report
-        return [@type, @dcode, @direc]
+        return [@section_type, @dcode, @direc]
     end
 
     #######################################################################
@@ -462,21 +486,21 @@ class SwitchSection < Section
 
         cpt1 = nil
         if tag == "B" 
-            cpt1 = self.connection_pt("A")
-            cpt2 = self.connection_pt("C")
+            cpt1 = self.connector("A")
+            cpt2 = self.connector("C")
             styp = "straight"
         elsif tag == "C"
-            cpt1 = self.connection_pt("A")
-            cpt2 = self.connection_pt("B")
+            cpt1 = self.connector("A")
+            cpt2 = self.connector("B")
             styp = "curve"
         else
-            cpt1 = self.connection_pt("C")
-            cpt2 = self.connection_pt("B")
+            cpt1 = self.connector("C")
+            cpt2 = self.connector("B")
             styp = "curve"
         end
-        pa      = self.connection_pt("A").position(true)
-        theta   = self.connection_pt("A").theta(true)
-        pc      = self.connection_pt("C").position(true)
+        pa      = self.connector("A").position(true)
+        theta   = self.connector("A").theta(true)
+        pc      = self.connector("C").position(true)
 
         q = Geom::Point3d.new(999.0, 999.0, 0.0)
         if @direc == "Left"
@@ -498,55 +522,63 @@ class SwitchSection < Section
         return @direc
     end
 
-    def label
-        return sprintf("SW%03d", @switch_index)
+    def make_slices
+        @section_group.entities.each do |e|
+            if ( e.is_a? Sketchup::Group )
+                if ( e.name == "slices" )
+                    e.erase!
+                end
+            end
+        end
+
+        @shells = Hash.new
+        make_out_slices
+        make_thru_slices
     end
-
-    def make_thru_slices(switch_group, last)      
-        ###################################################### make slices_group for THRU 
-        slices_group = parent_group.entities.add_group
+    
+    def make_out_slices
+        ###################################################### make slices_group for OUT
+        slices_group = @section_group.entities.add_group
         slices_group.name = "slices"
-        slices_group.attribute_dictionary("SlicesAttrs", true)
-        slices_group.set_attribute("SlicesAttrs", "zone_section_index", @zone_index)
-        slices_group.set_attribute("SlicesAttrs", "state", "out")
-        slices_group.set_attribute("SlicesAttrs", "section_guid", @section_group.guid)
+        slices_group.hidden = true
+        slices_group.set_attribute("SectionShellAttributes", "shell_type", "out")
+        slices_group.set_attribute("SectionShellAttributes", "inline_length", @out_length)
+        shell                 = SectionShell.new(slices_group, self)
+        @shells[shell.guid]   = shell
 
-        n = 0
+        slice_index = 0
         lpts = []
         @@bed_profile.each_with_index{ |p,i| lpts[i] = p.transform @xform_alpha}
 
-        while ( n < @n_ties_arc + 1 )
+        if ( !@xform_bed_alen.nil? )
             f = slices_group.entities.add_face( lpts)
-            f.attribute_dictionary("SliceAttrs", true)
-            f.set_attribute("SliceAttrs","index", n)
-            if ( n == 0 )
-                lpts.each_with_index{ |p,i| lpts[i] = p.transform @xform_bed_alen}
-            else
-                lpts.each_with_index{ |p,i| lpts[i] = p.transform @xform_bed_arc}
-            end
+            f.set_attribute("SliceAttributes","slice_index", slice_index)
+            slice_index += 1
+        end
+
+        n = 0
+        while ( n < @n_ties_arc + 1)
+            f = slices_group.entities.add_face( lpts)
+            f.set_attribute("SliceAttributes","slice_index", slice_index)
+            lpts.each_with_index{ |p,i| lpts[i] = p.transform @xform_bed_arc}
+            slice_index += 1
             n += 1
         end
 
-        if ( last )
-            f = slices_group.entities.add_face( lpts)
-            f.attribute_dictionary("SliceAttrs", true)
-            f.set_attribute("SliceAttrs","index", n)
-        end
+        slices_group.set_attribute("SectionShellAttributes", "slice_count", slice_index )
         slices_group.hidden = true
-        return slices_group
+        return
     end
-    ########################################################## make slices group for OUT
-    def make_out_slices(switch_group, last)
-        slices_group = parent_group.entities.add_group
+    ########################################################## make slices group for THRU
+    def make_thru_slices
+        last = true
+        slices_group = @section_group.entities.add_group
         slices_group.name = "slices"
-        slices_group.attribute_dictionary("SlicesAttrs", true)
-        slices_group.set_attribute("SlicesAttrs", "zone_section_index", @zone_index)
-        slices_group.set_attribute("SlicesAttrs", "state", "out")
-        slices_group.set_attribute("SlicesAttrs", "section_guid", @section_group.guid)
-
-        entry_tag = self.entry_tag
-        cpt = connection_pt(entry_tag)
-        slices_group.transformation = make_tr_group(cpt)
+        slices_group.hidden = true
+        slices_group.set_attribute("SectionShellAttributes", "shell_type", "thru")
+        slices_group.set_attribute("SectionShellAttributes", "inline_length", @thru_length)
+        shell                 = SectionShell.new(slices_group, self)
+        @shells[shell.guid]   = shell
 
         lpts = []
         @@bed_profile.each_with_index{ |p,i| lpts[i] = p.transform @xform_alpha}
@@ -559,14 +591,34 @@ class SwitchSection < Section
         n = 0
         while ( n < nface)
             f = slices_group.entities.add_face( lpts)
-            f.attribute_dictionary("SliceAttrs", true)
-            f.set_attribute("SliceAttrs","index", n)
+            f.set_attribute("SliceAttributes","slice_index", n)
             lpts.each_with_index{ |p,i| rpts[i] = p.transform @xform_bed}
             rpts.each_with_index{ |p,i| lpts[i] = p}
             n += 1
         end
+        slices_group.set_attribute("SectionShellAttributes", "slice_count", n)
         slices_group.hidden = true
-        return slices_group
+        return
+    end
+    def slices_tag(slices_type)
+        str = "switch " + @switch_name + " " + slices_type
+        return str
+    end
+
+    def export_ordered_slices(vtxfile, tag)
+        vtxfile.puts sprintf("switch %-20s %-s\n", "switch_name", @switch_name)
+        zone_name_A = connector("A").linked_connector.parent_section.zone.zone_name
+        zone_name_B = connector("B").linked_connector.parent_section.zone.zone_name
+        zone_name_C = connector("C").linked_connector.parent_section.zone.zone_name
+        vtxfile.puts sprintf("switch %-20s %-s\n", "zone_name_A", zone_name_A)
+        vtxfile.puts sprintf("switch %-20s %-s\n", "zone_name_B", zone_name_B)
+        vtxfile.puts sprintf("switch %-20s %-s\n", "zone_name_C", zone_name_C)
+        vtxfile.puts sprintf("switch %-20s %-d\n", "shell_count", @shells.size)
+        vtxfile.puts sprintf("switch %-20s\n", "end")
+            
+        @shells.each_value do |s|
+            s.write_ordered_slices(vtxfile, tag)
+        end
     end
 end
 

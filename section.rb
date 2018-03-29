@@ -160,7 +160,6 @@ class Section
     ###################################### Section.factory
     def Section.factory (section_group, connection_point = nil)
         section_type = section_group.get_attribute("SectionAttributes", "section_type")
-        puts "Section.factory, section_type = #{section_type}"
         section = nil
         if section_type == "curved"
             section = CurvedSection.new(section_group)
@@ -273,14 +272,16 @@ class Section
         Section.sections.each do |s|
             s.connectors.each do |c|
                 if !c.connected?
-                    puts "Section.connect_sections, #{nuc} connector.guid = #{c.guid}, " +
-                                "connector.tag = #{c.tag}, " +
+                    $logfile.puts "Section.connect_sections, #{nuc} connector.guid = " +
+                    #{c.guid}, connector.tag = #{c.tag}, " +
                                 "section_index_g = #{c.parent_section.section_index_g}"
                     nuc += 1
                 end
             end
         end
-        $logfile.puts "Section.connect_sections: Final pass #{nuc} unconnected Connectors remain"
+        $logfile.puts "Section.connect_sections: Final pass #{nuc} " +
+                                                    "unconnected Connectors remain"
+        $logfile.flush
         puts "Section.connect_sections: Final pass #{nuc} unconnected Connectors remain"
     end
 
@@ -566,6 +567,25 @@ class Section
         end
     end 
 
+    def Section.dump_transformation(xform, level)
+        xf = xform.to_a
+        str = ""
+        tag= "transformation:"
+        4.times { |n|
+            n4 = n * 4
+            str = str + tabs(level) + sprintf("%15s %10.6f,%10.6f,%10.6f,%10.6f\n",tag, xf[0+n4], xf[1+n4], xf[2+n4],xf[3+n4])
+            tag = ""
+        }
+        return str
+    end
+
+    def Section.face_to_a(f)
+        slice_index = f.get_attribute("SliceAttributes","slice_index")
+        str = "make_skins, slice_index = #{slice_index}, "
+        f.vertices.each_with_index{ |v,i| str += ", i = #{i} - #{v.position}" }
+        return str
+    end
+
     def Section.report_sections
         puts "Sections: #{@@track_sections.values.length}"
         types = Hash.new
@@ -602,6 +622,10 @@ class Section
 
     def Section.bed_h
         return @@bed_h
+    end
+
+    def Section.bed_tw
+        return @@bed_tw
     end
 
     def Section.tie_h

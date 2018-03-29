@@ -55,7 +55,7 @@ class CurvedSection < Section
     def initialize( section_group)
         @zone_guid = section_group.get_attribute("SectionAttributes", "zone_guid")
         @zone      = $zones.zone(@zone_guid)
-        puts "CurvedsSection.initialize"
+        #puts "CurvedsSection.initialize"
         @arcO72      = Hash.new
         @arcO72["Full"]    = [22.50, 34]
         @arcO72["Half"]    = [11.25, 20]
@@ -91,17 +91,20 @@ class CurvedSection < Section
         sname = "SectionAttributes"
         @entry_tag       = @section_group.get_attribute(sname, "entry_tag")
         @section_index_z = @section_group.get_attribute(sname, "section_index_z")
+        @slice_ordered_z = @section_group.get_attribute(sname, "slice_ordered_z")
+        @section_index_g = @section_group.get_attribute(sname, "section_index_g")
         @dcode           = @section_group.get_attribute(sname, "diameter_code")
         @arctyp          = @section_group.get_attribute(sname, "arc_type")
         phash = @parms[@dcode][1]
         pb = phash[@arctyp]
 
         @n_section_ties = pb[1]
-        @direc      = @section_group.get_attribute(sname, "direction")
-        @slope      = @section_group.get_attribute(sname, "slope")
-        xform_bed_a = @section_group.get_attribute(sname, "xform_bed")
-        @xform_bed  = Geom::Transformation.new(xform_bed_a)
-        xform_alpha_a = @section_group.get_attribute(sname, "xform_alpha")
+        @direc          = @section_group.get_attribute(sname, "direction")
+        @slope          = @section_group.get_attribute(sname, "slope")
+        @segment_count  = @section_group.get_attribute(sname, "segment_count")
+        xform_bed_a     = @section_group.get_attribute(sname, "xform_bed")
+        @xform_bed      = Geom::Transformation.new(xform_bed_a)
+        xform_alpha_a   = @section_group.get_attribute(sname, "xform_alpha")
         if xform_alpha_a.nil?        # this code is kludge while we add slices_group
             radius         = (@parms[@dcode])[0]
             arclen         = pb[0] * Math::PI / 180.0
@@ -114,8 +117,8 @@ class CurvedSection < Section
         @inline_length = radius * pb[0] * Math::PI / 180.0
 
 
-        arclen_s = sprintf("  %5.2f", pb[0])
-        @code = @dcode + arclen_s
+        arclen_s = sprintf("  %5.2f %5s", pb[0], @direc)
+        @code = @dcode + arclen_s 
     end
 
     def make_xform_alpha(radius, arclen)
@@ -136,6 +139,9 @@ class CurvedSection < Section
             arclst = "Full|Half|Quarter"
             while !okflg
                 okflg = true
+                if ( target_point.is_a? Connector )
+                    @@slope = target_point.parent_section.slope
+                end
                 prompts = [$exStrings.GetString("Diameter"),
                            $exStrings.GetString("Arc"), 
                            $exStrings.GetString("Direction"),
@@ -184,8 +190,9 @@ class CurvedSection < Section
         @n_section_ties = pb[1]
         arclen = len_arc * Math::PI / 180.0
         @inline_length =  radius * arclen
+        @segment_count =  @n_section_ties
         
-        delta    = arclen / @n_section_ties
+        delta    = arclen / @segment_count
         dh       = @slope * radius * arclen / @n_section_ties
         dl       = radius * sin(delta)
         alpha    = asin( dh /dl )
@@ -212,11 +219,13 @@ class CurvedSection < Section
         @section_group.set_attribute(sname, "arc_type",      @arctyp)
         @section_group.set_attribute(sname, "direction",     @direc)
         @section_group.set_attribute(sname, "slope",         @slope)
+        @section_group.set_attribute(sname, "segment_count", @segment_count)
         @section_group.set_attribute(sname, "xform_bed",     @xform_bed.to_a)
         @section_group.set_attribute(sname, "xform_alpha",   @xform_alpha.to_a)
         @section_index_g = section_index_g
         @section_group.set_attribute(sname, "section_index_g", @section_index_g)
         @section_group.set_attribute(sname, "section_index_z", @section_index_z)
+        @section_group.set_attribute(sname, "slice_ordered_z", @slice_ordered_z)
         @section_group.set_attribute(sname, "entry_tag",       @entry_tag)
 
         lpts = []
@@ -400,6 +409,7 @@ class CurvedSection < Section
     def outline_text_group_factory
         outline_text_group = @section_group.entities.add_group
         outline_text_group.name = "outline_text"
+        outline_text_group.layer = "zones"
 
         radius  = @parms[@dcode][0]
         phash   = @parms[@dcode][1]
@@ -601,7 +611,6 @@ class CurvedSection < Section
         slices_group.hidden = true
         slices_group.attribute_dictionary("SectionShellAttributes", true)
         slices_group.set_attribute("SectionShellAttributes", "shell_type"   , "notype")
-        puts @inline_length
         slices_group.set_attribute("SectionShellAttributes", "inline_length", @inline_length)
 
         shell = SectionShell.new(slices_group, self)
@@ -653,6 +662,10 @@ class CurvedSection < Section
         return exttg
     end
 
+    def segment_count
+        return @segment_count
+    end
+
     def section_index_g
         return @section_index_g
     end
@@ -660,11 +673,16 @@ class CurvedSection < Section
     def section_index_z
         return @section_index_z
     end
+    def slice_ordered_z
+        return @slice_ordered_z
+    end
 
-    def update_ordered_attributes(section_index_z, entry_tag)
+    def update_ordered_attributes(section_index_z, slice_ordered_z, entry_tag)
         @section_index_z = section_index_z
+        @slice_ordered_z = slice_ordered_z
         @entry_tag       = entry_tag
         @section_group.set_attribute("SectionAttributes", "section_index_z", @section_index_z)
+        @section_group.set_attribute("SectionAttributes", "slice_ordered_z", @slice_ordered_z)
         @section_group.set_attribute("SectionAttributes", "entry_tag", @entry_tag)
     end
 

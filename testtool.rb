@@ -8,7 +8,9 @@ include Math
 class TestTool
     def initialize
         SKETCHUP_CONSOLE.show
-        TrackTools.tracktools_init("TestTool")
+        if !TrackTools.tracktools_init("TestTool")
+            return
+        end
         rendering_options = Sketchup.active_model.rendering_options
         rendering_options["EdgeColorMode"]= 0
         rendering_options.each_pair { |key, value| puts "#{key} : #{value}" }

@@ -50,38 +50,37 @@ module TrackTools
 $trkdir = "/Users/fredpatrick/wrk/trkskp"
 puts $trkdir
 require "#{$trkdir}/addsections.rb"
+require "#{$trkdir}/addrisertab.rb"
+require "#{$trkdir}/erasesectionrange.rb"
 require "#{$trkdir}/editsections.rb"
+require "#{$trkdir}/scanlayout.rb"
 require "#{$trkdir}/editnames.rb"
 require "#{$trkdir}/infotool.rb"
 require "#{$trkdir}/testtool.rb"
 #require "#{$trkdir}/gates.rb"
 require "#{$trkdir}/switches.rb"
+require "#{$trkdir}/risers.rb"
 require "#{$trkdir}/zone.rb"
 
 def TrackTools.tracktools_init(tool_classname)
-    model = Sketchup.active_model
-    model_path = model.path
-    if model_path == ""
-        $model_basename = "unnamed"
-        logpath = Dir.getwd + '/' + 'sketchup.log'
-        puts logpath
-        $logfile = File.open(logpath, "a")
-    else
-        $model_basename = File.basename(model_path, '.skp')
-        puts "model_basename #{$model_basename}"
-        model_dir = File.dirname(model_path)
-        puts model_dir
-        logpath = model_dir + '/' + $model_basename + '.log'
-        puts logpath
-        $logfile = File.open(logpath, "a")
+    model_path = Sketchup.active_model.path
+    puts "Sketchup.active_model.title = #{Sketchup.active_model.title}"
+    puts "Sketchup.active_model.path  = #{Sketchup.active_model.path}"
+    attrdicts = Sketchup.active_model.attribute_dictionaries
+    attrdicts.each do |ad|
+        puts ad.name
+        ad.each_pair { |k, v| puts "\t #{k}    #{v}" }
     end
+    TrackTools.create_directory_attributes
+
     puts "################################################################"
     puts "####################################### #{tool_classname}"
     puts "####################################### #{Time.now.ctime}"
     $logfile.puts "################################################################"
     $logfile.puts "####################################### #{tool_classname}"
     $logfile.puts "####################################### #{Time.now.ctime}"
-
+    $logfile.flush
+    Sketchup.active_model.add_observer(TrackModelObserver.new)
     rendering_options = Sketchup.active_model.rendering_options
     rendering_options["EdgeColorMode"] = 0
     $logfile.puts "EdgeColorMode: #{rendering_options["EdgeColorMode"]}"
@@ -93,11 +92,88 @@ def TrackTools.tracktools_init(tool_classname)
     $switches = Switches.new
     Section.connect_sections
     $track_loaded = true
+    $risers = Risers.new
     vmenu = UI.menu("View")
     vmenu.set_validation_proc($view_zones_id) { MF_ENABLED }
     vmenu.set_validation_proc($view_zones_id) { MF_CHECKED }
-    $logfile.flush
+    $zones.print_zone_labels
 end  # end tracktools_init
+
+def TrackTools.create_directory_attributes
+    battrs     = Sketchup.active_model.attribute_dictionary("DirectoryAttributes")
+    bname      = "DirectoryAttributes"
+    model_name = Sketchup.active_model.title
+    
+    if !battrs
+        battrs = Sketchup.active_model.attribute_dictionary("DirectoryAttributes", true)
+    end
+    if model_name == ""  || battrs.length == 0
+        model_name = "noname"
+        @@home_directory  = ENV["HOME"]
+        @@work_directory  = "wrk/skp"
+        @@model_directory = ""
+
+        prompts =["Model Name", "Home Directory", "Work Directory", "Model Directory"]
+        title   = "Enter Base Attribute Values"
+        okflg   = false
+        while !okflg
+            defaults = [model_name, @@home_directory, @@work_directory, @@model_directory]
+
+            results = UI.inputbox(prompts, defaults, title)
+            puts results
+            model_name, @@home_directory, @@work_directory, @@model_directory = results
+
+            okflg = true
+            if  !Dir.exists?(@@home_directory)
+                @@home_directory = "Invalid"
+                okflg  = false
+            end
+            if !Dir.exists?(File.join(@@home_directory, @@work_directory))
+                @@work_directory = "Invalid"
+                okflg = false
+            end
+            if @@model_directory == ""
+                @@model_directory = model_name
+            end
+        end
+        Sketchup.active_model.set_attribute(bname, "home_directory",  @@home_directory)
+        Sketchup.active_model.set_attribute(bname, "work_directory",  @@work_directory)
+        Sketchup.active_model.set_attribute(bname, "model_directory", @@model_directory)
+        model_dir = File.join(@@home_directory, @@work_directory, @@model_directory)
+        if !Dir.exists?(model_dir)
+            Dir.mkdir(model_dir)
+        end
+        skpfile = File.join(@@home_directory, @@work_directory, @@model_directory, 
+                            model_name + ".skp")
+        puts skpfile
+        if !File.exists?(skpfile)
+            puts "tracktools--- saving skpfile - #{skpfile}"
+            Sketchup.active_model.save(skpfile)
+        end
+    else
+        @@home_directory  = Sketchup.active_model.get_attribute(bname, "home_directory")
+        @@work_directory  = Sketchup.active_model.get_attribute(bname, "work_directory")
+        @@model_directory = Sketchup.active_model.get_attribute(bname, "model_directory")
+    end
+    $logfile = TrackTools.open_file(".log", "a")
+
+    puts "TrackTools.tracktools_init, home_directory = #{@@home_directory}"
+    puts "TrackTools.tracktools_init, work_directory = #{@@work_directory}"
+    puts "TrackTools.tracktools_init, model_directory = #{@@model_directory}"
+    $logfile.puts "TrackTools.tracktools_init, home_directory  = #{@@home_directory}"
+    $logfile.puts "TrackTools.tracktools_init, work_directory  = #{@@work_directory}"
+    $logfile.puts "TrackTools.tracktools_init, model_directory = #{@@model_directory}"
+end
+
+def TrackTools.open_file(type, mode)
+    mdlnam = Sketchup.active_model.title
+    return File.open(File.join(@@home_directory, @@work_directory, @@model_directory,
+                           mdlnam+type), mode)
+end
+
+def TrackTools.working_path
+    return File.join(@@home_directory, @@work_directory)
+end
 
 def TrackTools.model_summary
     model = Sketchup.active_model
@@ -154,12 +230,60 @@ if( not $draw_tracktool_build_loaded )
     }
     $draw_tracktool_build_loaded = true
 end
+if( not $draw_tracktool_erasesectionrange_loaded )
+    $draw_submenu_track.add_item("Erase Section Range") {
+        Sketchup.active_model.select_tool EraseSectionRange.new
+    }
+    $draw_tracktool_erasesectionrange_loaded = true
+end
+
+if( not $draw_tracktool_createbase_loaded )
+    $draw_submenu_track.add_item("Create Base") {
+        Sketchup.active_model.select_tool CreateBase.new
+    }
+    $draw_tracktool_createbase_loaded = true
+end
+
+if( not $draw_tracktool_addrisertab_loaded )
+    $draw_submenu_track.add_item("Add RiserTab") {
+        Sketchup.active_model.select_tool AddRiserTab.new
+    }
+    $draw_tracktool_addrisertab_loaded = true
+end
+
+if( not $draw_tracktool_mangedefinitions_loaded )
+    $draw_submenu_track.add_item("Manage Definitions") {
+        Sketchup.active_model.select_tool ManageDefinitions.new
+    }
+    $draw_tracktool_mangedefinitions_loaded = true
+end
+
+if( not $draw_tracktool_addriser_loaded )
+    $draw_submenu_track.add_item("Add Riser") {
+        Sketchup.active_model.select_tool AddRiser.new
+    }
+    $draw_tracktool_addriser_loaded = true
+end
+
+if( not $draw_tracktool_editriserbase_loaded )
+    $draw_submenu_track.add_item("Edit Riser Base") {
+        Sketchup.active_model.select_tool EditRiserBase.new
+    }
+    $draw_tracktool_editriserbase_loaded = true
+end
 
 if( not $draw_track_editsections_loaded )
     $draw_submenu_track.add_item("Edit Sections") {
         Sketchup.active_model.select_tool EditSections.new
     }
     $draw_track_editsections_loaded = true
+end
+
+if( not $draw_track_scanlayout_loaded )
+    $draw_submenu_track.add_item("Scan") {
+        Sketchup.active_model.select_tool ScanLayout.new
+    }
+    $draw_track_scanlayout_loaded = true
 end
 
 if( not $draw_track_editnames )
@@ -210,3 +334,9 @@ if ( not $view_zones_loaded )
 end
 
 end    # end module Sketchup::TrackTools
+
+class TrackModelObserver < Sketchup::ModelObserver
+    def onPostSaveModel(model)
+        puts "TrackModelObserver.onPostSaveModel, title = #{model.title}"
+    end
+end

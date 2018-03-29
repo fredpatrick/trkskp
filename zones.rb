@@ -55,6 +55,8 @@ class Zones
     def initialize 
         @zones       = Hash.new
         Zone.init_class_variables
+        Base.init_class_variables
+        RiserTab.init_class_variables
         Switches.init_class_variables
         Section.init_class_variables
         Connector.init_class_variables
@@ -70,6 +72,7 @@ class Zones
             @zones_group = Sketchup.active_model.entities.add_group
             @zones_group.name = "zones"
             @zones_group.locked = true
+            @zones_group.description= "group zones"
             @zones_group.set_attribute("ZonesAttributes", "zone_count", 0)
             @zone_count = 0
             @outline_visible = true
@@ -86,6 +89,8 @@ class Zones
             end
         end
         puts "Zones.initialize, @zone_count = #{@zone_count}"
+        $logfile.puts "Zones.initialize, @zone_count = #{@zone_count}"
+        #logfile.flush
     end
 
     def load_existing_zones       #this is separate from intialize because 
@@ -94,6 +99,8 @@ class Zones
             puts z.to_s("load_existing_zone")
         end
         set_outline_visibility
+        $logfile.puts "load_existing_zones"
+        $logfile.flush
     end
 
     def get_zone(connection_point, new_section_type)
@@ -103,7 +110,6 @@ class Zones
             else
                 zone = add_zone
                 zone.load_new_zone(connection_point)
-                puts zone.to_s("load_new_zone")
                 return zone
             end
         else                                    # Connector
@@ -112,10 +118,8 @@ class Zones
                 if ( new_section_type    == "switch" )
                     return nil
                 else
-                    puts "Zone.get_zone, adding zone"
                     zone = add_zone
                     zone.load_new_zone(connection_point)
-                    puts zone.to_s("load_new_zone")
                     return zone
                 end
             else
@@ -125,12 +129,12 @@ class Zones
     end
 
     def add_zone
-        puts "Zones.add_zone, @zone_count = #{@zone_count}"
-        zone_group        = @zones_group.entities.add_group
-        zone_group.name   = "zone"
-        zone_group.locked = true
-        zone_index        = @zone_count
-        zone_name = sprintf("Z%05d", zone_index)
+        zone_group             = @zones_group.entities.add_group
+        zone_group.name        = "zone"
+        zone_group.locked      = true
+        zone_index             = @zone_count
+        zone_name              = sprintf("Z%05d", zone_index)
+        zone_group.description = "group zone #{zone_name}"
         zone_group.set_attribute("ZoneAttributes", "zone_index", zone_index)
         zone_group.set_attribute("ZoneAttributes", "zone_name", zone_name)
 
@@ -160,6 +164,18 @@ class Zones
             return found_connector
         end
         return nil
+    end#
+
+    def create_bases
+        @zones.each_value do |z|
+            z.erase_base_groups
+            z.add_new_base
+        end
+        $switches.create_base_for_switches
+    end
+
+    def zone_count
+        return @zone_count
     end
 
     def zones_group
@@ -203,6 +219,37 @@ class Zones
         end
         @zones_group.set_attribute("ZonesAttributes", "outline_visible", @outline_visible)
     end
+
+    def print_zone_labels
+        puts "zones.print_zone_labels, begin"
+        $logfile.puts "zones.print_zone_labels, begin"
+        $logfile.flush
+        all_labels = []
+        @zones.each_value do |z|
+            puts z
+            all_labels << z.ordered_labels
+        end
+        nz = all_labels.size
+        n = 0
+        endflg = false
+        while !endflg
+            ltxt = ""
+            endflg = true
+            nz.times do |i|
+                zone_labels = all_labels[i]
+                nl = zone_labels.size
+                if n < nl
+                    label =zone_labels[n]
+                    ltxt = ltxt + sprintf("%10s",label)
+                    endflg = false
+                else
+                    ltxt = ltxt + "          "
+                end
+            end
+            puts sprintf("%4d", n) + ltxt
+            n += 1
+        end
+    end
     
     def set_outline_visibility
         vmenu = UI.menu("View")
@@ -219,44 +266,26 @@ class Zones
     end
 
     def export_layout_data
-        model_path = Sketchup.active_model.path
-        if model_path == ""
-            return nil
-        end
-        #vtxdir = File.dirname(model_path) + '/'
-        vtxdir = "/Users/fredpatrick/wrk/cfg/"
-        model_basename = File.basename(model_path, '.skp')
-        #filename = UI.savepanel("Save Vertex File", vtxdir, model_basename + '.vtx')
-        filename = vtxdir + model_basename + '.vtx'
-        if filename.nil?
-            return nil
-        end
-        vtxfile = File.open(filename, "w")
+        vtxfile = TrackTools.open_file(".vtx", "w")
+        vtxfile.puts  sprintf("layout %-20s %10.5f\n", "bed_w",        Section.bed_w)
+        vtxfile.puts  sprintf("layout %-20s %10.5f\n", "bed_h",        Section.bed_h)
+        vtxfile.puts  sprintf("layout %-20s %10.5f\n", "bed_tw",       Section.bed_tw)
+        vtxfile.puts  sprintf("layout %-20s %d\n",     "zone_count",   @zones.size() )
+        vtxfile.puts  sprintf("layout %-20s %d\n",     "switch_count", $switches.switch_count)
+        vtxfile.puts  sprintf("layout %-20s\n",     "end")
         @zones.values.each { |z| 
             puts "Zones.export_layout_data, zone_name = #{z.zone_name}"
             z.export_layout_slices(vtxfile) 
         }
         $switches.export_layout_slices(vtxfile)
+        vtxfile.close
     end
+
 
 #################################################################Zones.reports
     def report_file
         puts "Zones.report_file"
-        model_path = Sketchup.active_model.path
-        if model_path == ""
-            return nil
-        end
-        #rptdir = File.dirname(model_path) + '/'
-        rptdir = "/Users/fredpatrick/wrk/cfg/"
-        model_basename = File.basename(model_path, '.skp')
-        #filename = UI.savepanel("Save Report File", rptdir, model_basename + '.rpt')
-        filename = rptdir + model_basename + '.rpt'
-
-        if filename.nil?
-            return nil
-        end
-        puts filename
-        return File.open(filename, "w")
+        return TrackTools.open_file(".rpt", "w")
     end
 
     def report_by_zone
@@ -269,12 +298,13 @@ class Zones
                                                                         "     Start    End"
         hdr_txt2 = "                                              sections " +
                                                                        "     Switch   Switch"
+        model_basename = Sketchup.active_model.title
         if $rptfile.nil?
-            puts "\n\n    Report Summary Model = #{$model_basename} #{Time.now.ctime}"
+            puts "\n\n    Report Summary Model = #{model_basename} #{Time.now.ctime}"
             puts hdr_txt1
             puts hdr_txt2
         else
-            $rptfile.puts "\n\n    Report Summary Model = #{$model_basename} #{Time.now.ctime}"
+            $rptfile.puts "\n\n    Report Summary Model = #{model_basename} #{Time.now.ctime}"
             $rptfile.puts hdr_txt1
             $rptfile.puts hdr_txt2
         end
@@ -304,7 +334,9 @@ end
 
 class ExportLayoutData
     def initialize
-        TrackTools.tracktools_init("ExportLayoutData")
+        if !TrackTools.tracktools_init("ExportLayoutData")
+            return
+        end
     end
 
     def activate
@@ -323,7 +355,10 @@ end
 
 class UpdateLayoutData
     def initialize
-        TrackTools.tracktools_init("UpdateLayoutData")
+        if !TrackTools.tracktools_init("UpdateLayoutData")
+            return
+        end
+
     end
 
     def activate
@@ -342,7 +377,9 @@ end
 
 class ExportLayoutReport
     def initialize
-        TrackTools.tracktools_init("ExportLayoutReport")
+        if !TrackTools.tracktools_init("ExportLayoutReport")
+            return
+        end
     end
 
 

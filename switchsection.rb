@@ -67,6 +67,7 @@ class SwitchSection < Section
     ###################################### load_sketchup_group
     def load_sketchup_group
         sname = "SectionAttributes"
+        @section_index_g = @section_group.get_attribute(sname, "section_index_g")
         @dcode           = @section_group.get_attribute(sname, "diameter_code")
         @arctyp          = @section_group.get_attribute(sname, "arc_type")
         @slope           = @section_group.get_attribute(sname, "slope")
@@ -120,12 +121,15 @@ class SwitchSection < Section
             okflg = false
             while !okflg
                 okflg = true
+                if ( target_point.is_a? Connector )
+                    @@slope = target_point.parent_section.slope
+                end
                 prompts = [$exStrings.GetString("Diameter"),
                            $exStrings.GetString("Direction"),
                            $exStrings.GetString("Slope"),
                            $exStrings.GetString("Connect With"),
                            $exStrings.GetString("Repeat")]
-                values = [@@dcode,@@direc,0.00,"A",1]
+                values = [@@dcode,@@direc,@@slope,"A",1]
                 tlist  = ["O72|O60|O48|O36", "Left|Right", "","A|B|C",""]
 
                 results = inputbox prompts, values, tlist, 
@@ -200,6 +204,13 @@ class SwitchSection < Section
         @section_group.set_attribute(sname, "section_type",  "switch")
         @section_group.set_attribute(sname, "diameter_code", @dcode)
         @section_group.set_attribute(sname, "slope",         @slope)
+        @section_group.set_attribute(sname, "radius",        radius)
+        @section_group.set_attribute(sname, "delta",         delta)
+        @section_group.set_attribute(sname, "arc_degrees",   len_arc)
+        @section_group.set_attribute(sname, "origin",        arc_origin)
+        @section_group.set_attribute(sname, "arc_count",     @n_ties_arc)
+        @section_group.set_attribute(sname, "ab_length",     len_straight)
+        @section_group.set_attribute(sname, "a",             a)
         @section_group.set_attribute(sname, "direction",     @direc)
         @section_group.set_attribute(sname, "xform_bed",     @xform_bed.to_a)
         @section_group.set_attribute(sname, "xform_bed_arc", @xform_bed_arc.to_a)
@@ -428,6 +439,7 @@ class SwitchSection < Section
     def outline_text_group_factory
         outline_text_group = @section_group.entities.add_group
         outline_text_group.name = "outline_text"
+        outline_text_group.layer = "zones"
 
         char_group = outline_text_group.entities.add_group
         char_group.entities.add_3d_text(@switch_name, TextAlignLeft, @@ofont, @@obold, false,
@@ -605,8 +617,121 @@ class SwitchSection < Section
         return str
     end
 
+    def create_base_for_switch
+        @section_group.entities.each do |e|
+            if e.is_a? Sketchup::Group
+                if e.name == "base"
+                    puts "create_base_for_switch, found existing base_group"
+                    e.erase!
+                end
+            end
+        end
+        @base_group         = @section_group.entities.add_group
+        @base_group.name    = "base"
+        @base               = Base.new(@base_group, self)
+    end
+
+    def make_switch_geometry(slices_group, section_group, profile)
+
+        sname            = "SectionAttributes"
+        slope            = section_group.get_attribute(sname, "slope")
+        radius           = section_group.get_attribute(sname, "radius")
+        delta            = section_group.get_attribute(sname, "delta")
+        arc_degrees      = section_group.get_attribute(sname, "arc_degrees")
+        arc_origin       = section_group.get_attribute(sname, "origin")
+        arc_count        = section_group.get_attribute(sname, "arc_count")
+        ab_length        = section_group.get_attribute(sname, "ab_length")
+        a                = section_group.get_attribute(sname, "a")
+        direct           = section_group.get_attribute(sname, "direction")
+        xform_bed_arc_a  = section_group.get_attribute(sname, "xform_bed_arc")
+        xform_bed_arc    = Geom::Transformation.new(xform_bed_arc_a)
+        xform_alpha_a    = section_group.get_attribute("SectionAttributes", "xform_alpha")
+        xform_alpha      = Geom::Transformation.new(xform_alpha_a)
+        xform_group      = section_group.transformation
+        base_width       = Base.base_width
+        base_thickness   = Base.base_thickness
+        base_profile     = Base.base_profile
+
+        l      = ab_length - a
+        rp2    = radius +  0.5 * base_width
+        rm2    = radius -  0.5 * base_width
+        theta1 = atan( l / rp2 )
+        theta2 = asin( l / rp2 )
+        theta3 = arc_degrees * Math::PI / 180.0
+
+        puts Section.dump_transformation(xform_group, 1)
+
+        lpts        = []
+        pts         = []
+        slice_index = 0
+        base_profile.each_with_index{ |p,i| lpts[i] = p}
+        lpts.each_with_index{ |p,i| pts[i] = p.transform xform_group}
+        f = slices_group.entities.add_face(pts)
+        f.set_attribute("SliceAttributes", "slice_index", slice_index)
+        slice_index += 1
+
+        if  a != 0 
+            va = Geom::Vector3d.new(0.0, a, 0.0)
+            lpts.each_with_index { |p,i| pts[i] = p + va}
+            f = slices_group.entities.add_face(pts)
+            f.set_attribute("SliceAttributes", "slice_index", slice_index)
+            slice_index += 1
+        end
+
+        ns = arc_count
+        ns.times { |n|
+            theta = n * delta
+            lpts[0] = Geom::Point3d.new( radius - rm2 * cos(theta), rm2 * sin(theta), 0.0)
+            lpts[1] = Geom::Point3d.new( radius - radius *cos(theta), radius * sin(theta), 0.0)
+            if theta <= theta1
+                lpts[2] = Geom::Point3d.new( -0.5 * base_width, rp2 * tan(theta), 0.0)
+            elsif theta > theta1 && theta <= theta2
+                lpts[2] = Geom::Point3d.new( radius - l / tan(theta), l, 0.0)
+            elsif theta > theta2 && theta < theta3
+                lpts[2] = Geom::Point3d.new( radius - rp2 * cos(theta), radius * sin(theta), 0.0)
+            end
+            lpts[3] = lpts[2] + Geom::Vector3d.new(0.0, 0.0, -base_thickness)
+            lpts[4] = lpts[1] + Geom::Vector3d.new(0.0, 0.0, -base_thickness)
+            puts "pts, n = #{n} - #{lpts[0]} #{lpts[1]} #{lpts[2]}  #{lpts[3]} #{lpts[4]} "
+            lpts.each_with_index { |p,i| pts[i] = p.transform xform_group}
+            puts "pts, n = #{n} - #{pts[0]} #{pts[1]} #{pts[2]}  #{pts[3]} #{pts[4]} "
+            f = slices_group.entities.add_face(pts)
+            f.set_attribute("SliceAttributes", "slice_index", slice_index)
+            slice_index += 1
+        }
+    end
+
     def export_ordered_slices(vtxfile, tag)
+        radius      = @parms[@dcode][0]
+        arc_degrees = @parms[@dcode][3]
+        x0 = -radius
+        if ( @direc == "Right" )
+            x0 = radius
+        end
+        y0           = @parms[@dcode][5]
+        z0           = y0 * @slope
+        arc_count    = @parms[@dcode][4]
+        ab_length    = @parms[@dcode][1]
+        ac_length    = radius * arc_degrees * Math::PI / 180.0
+
         vtxfile.puts sprintf("switch %-20s %-s\n", "switch_name", @switch_name)
+        vtxfile.puts sprintf("switch %-20s %-s\n", "direction"  , @direc)
+        vtxfile.puts sprintf("switch %-20s %-10.5f\n", "slope",   @slope)
+        vtxfile.puts sprintf("switch %-20s %-10.5f\n", "arc_radius",   radius)
+        vtxfile.puts sprintf("switch %-20s %-10.5f\n", "arc_degrees",   arc_degrees)
+        vtxfile.puts sprintf("switch %-20s %-10.5f %-10.5f %-10.5f\n", "arc_origin", x0, y0, z0)
+        vtxfile.puts sprintf("switch %-20s %-d\n", "arc_count", arc_count)
+        vtxfile.puts sprintf("switch %-20s %-10.5f\n", "ab_length", ab_length)
+        vtxfile.puts sprintf("switch %-20s %-10.5f\n", "ac_length", ac_length)
+        xf = @section_group.transformation.to_a
+        vtxfile.puts sprintf("switch %-20s %16.8f %16.8f %16.8f %10.8f\n", "xform",
+                                xf[0], xf[4], xf[8], xf[12] )
+        3.times { |n|
+            j = n + 1
+            vtxfile.puts sprintf("       %-20s %16.8f %16.8f %16.8f %10.8f\n", " ",
+                                xf[j], xf[j+4], xf[j+8], xf[j+12] )
+        }
+
         zone_name_A = connector("A").linked_connector.parent_section.zone.zone_name
         zone_name_B = connector("B").linked_connector.parent_section.zone.zone_name
         zone_name_C = connector("C").linked_connector.parent_section.zone.zone_name

@@ -148,6 +148,7 @@ class Connector < ConnectionPoint
             @position = face_position(face)
             @normal = Geom::Vector3d.new(0,0,0) - face.normal
             @linked_guid = "UNCONNECTED"
+            @label       = "S#{@section.section_index_g}_#{@tag}"
             @connector_group = @section_group.entities.add_group
             @connector_group.name = "connector"
             @connector_group.layer = "track_sections"
@@ -155,6 +156,7 @@ class Connector < ConnectionPoint
             @connector_group.attribute_dictionary(cname, true)
             @connector_group.set_attribute(cname, "tag",         @tag)
             @connector_group.set_attribute(cname, "linked_guid", @linked_guid)
+            @connector_group.set_attribute(cname, "label", @label)
             @connector_group.set_attribute(cname, "section_index_g", @section.section_index_g)
             ##################### Note section_index_g is used only for info in model dumps
             pts = []
@@ -178,12 +180,20 @@ class Connector < ConnectionPoint
             cname = "ConnectorAttributes"
             @tag          = arg0.get_attribute(cname ,"tag")
             @linked_guid = arg0.get_attribute(cname, "linked_guid")
+            @label       = arg0.get_attribute(cname, "label")
+            if @label.nil?
+                @label       = "S#{@section.section_index_g}_#{@tag}"
+                arg0.set_attribute(cname, "label", @label)
+            end
             @connector_group = arg0
         end
 
         x = @normal.x
         y = @normal.y
         @theta = atan2(y, x)
+    end
+    def label
+        return @label
     end
 
     def print_face(connection_group, tag)
@@ -328,6 +338,8 @@ class Connector < ConnectionPoint
         return @section
     end
     def parent_section=(section)
+        puts "###################################################Connector.parent_section=" +
+                    "SHOULD NEVER GET HERE############################################"
         @section       = section
         @section_group = section.section_group
     end

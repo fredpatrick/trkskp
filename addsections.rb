@@ -55,8 +55,8 @@ include Math
 class AddSections
 
     def initialize
+        puts "AddSections.initialize"
         TrackTools.tracktools_init("AddSections")
-        $logfile.flush
 
         $current_connection_point = nil
         @dtxt = ""
@@ -76,8 +76,6 @@ class AddSections
             UI.messagebox("Couldnt get cursor_path")
             return
         end 
-        @ip_xform = $zones.zones_group.transformation.clone
-        @ip_xform.invert!
 
         @cursor_id = @cursor_looking
         define_onRButtonDown
@@ -92,8 +90,15 @@ class AddSections
     end
 
     def activate
+#       if !TrackTools.tracktools_init("AddSections")
+#           puts "tracktools_init failed"
+#           return
+#       end
         $logfile.puts "############################# activate AddSections #{Time.now.ctime}"
+        $logfile.flush
         puts          "############################# activate AddSections #{Time.now.ctime}"
+        @ip_xform = $zones.zones_group.transformation.clone
+        @ip_xform.invert!
         Section.get_class_defaults
         puts "AddSections.activate, SectionBuildDefaults"
         track_attributes = Sketchup.active_model.attribute_dictionary("SectionBuildDefaults")
@@ -122,6 +127,12 @@ class AddSections
         npick = @ph.do_pick(x, y)
 
         if npick > 0 
+#           allp = @ph.all_picked
+#           puts "npick = #{npick}"
+#           allp.each do |e|
+#               puts e.typename
+#           end
+            
             path = @ph.path_at(0)
             section = Section.section_path?(path)
             cpt = nil
@@ -145,6 +156,7 @@ class AddSections
                     define_onRButtonDown
                 end
             else
+                @section = section
                 $current_connection_point = cpt
                 #puts "AddSections.onMouseMove, current_connection_point,menuflg = #{@menu_flg}"
                 @cursor_id = @cursor_on_target
@@ -208,6 +220,9 @@ class AddSections
             menu.add_item("Add Switch") {
                 build_section("switch")
             }
+            menu.add_item("Erase Selection") {
+                erase_section
+            }
             menu.add_item("Close") {
                 puts "onMouseMove-Close, deactivating conext menu"
                 undef getMenu
@@ -222,6 +237,8 @@ class AddSections
         ccpt = $current_connection_point
         puts "AddSections.build_section,####################################################" +
                        "#  #{new_section_type}"
+        $logfile.puts "AddSections.build_section,##########################################" +
+                       "###########  #{new_section_type}"
         current_zone = $zones.get_zone($current_connection_point, new_section_type)
         if ( new_section_type == "switch" )
             parent = $switches
@@ -231,6 +248,7 @@ class AddSections
         $repeat = -1
         new_section = nil
         while $repeat != 0
+            puts "tracktool.build_section, new_section_type = #{new_section_type}"
             $logfile.puts "tracktool.build_section, new_section_type = #{new_section_type}"
             TrackTools.model_summary
             new_section = parent.add_section($current_connection_point, new_section_type)
@@ -246,7 +264,6 @@ class AddSections
             $repeat = $repeat - 1
             @ph.view.refresh
         end
-        puts current_zone.to_s("section(s) added")
         if ( new_section.nil? )
             if ( current_zone.section_count == 0 ) 
                 $zones.delete_zone(current_zone.guid)
@@ -254,12 +271,16 @@ class AddSections
             return nil               
         end
         puts "AddSections.build_section #################### #{new_section_type}"
+        $logfile.puts "AddSections.build_section #################### #{new_section_type}"
         if ( new_section_type == "switch" && !current_zone.nil? )
             puts "Addsections.build_section, $current_connection_point.guid = "+
+               "#{ccpt.guid}, #{ccpt.tag}"
+            $logfile.puts "Addsections.build_section, $current_connection_point.guid = "+
                "#{ccpt.guid}, #{ccpt.tag}"
             current_zone.end_zone(new_section, 
                                   ccpt.linked_connector.tag)
             puts current_zone.to_s("after end_zone-1")
+            $logfile.puts current_zone.to_s("after end_zone-1")
         end
         new_section.connectors.each do |c|
             if ( !c.connected? )
@@ -268,6 +289,8 @@ class AddSections
                     found_section = found_connector.parent_section
                     found_tag     = found_connector.tag
                     puts "Addsections.build_section, found connected section," +
+                                 "type = #{found_connector.parent_section.section_type}"
+                    $logfile.puts "Addsections.build_section, found connected section," +
                                  "type = #{found_connector.parent_section.section_type}"
                     if ( new_section.section_type == "switch" )
                         if ( found_section.section_type != "switch" )
@@ -280,6 +303,7 @@ class AddSections
                             current_zone.end_zone(found_connector.parent_section, 
                                                   found_connector.tag)
                             puts current_zone.to_s("after end_zone-2")
+                            $logfile.puts current_zone.to_s("after end_zone-2")
                         else
                             zoneb = found_connector.parent_section.zone
                             if ( current_zone.guid != zoneb.guid)
@@ -303,6 +327,24 @@ class AddSections
         end
     end
 
+    def erase_section
+        if ( @section.nil? )
+            return
+        end
+        if ( @section.section_type == "switch" )
+            $switches.erase_switch(@section)
+            @section = nil
+            return
+        end
+
+        zone = @section.zone
+        if ( zone.erase_section(@section) )    #erase_section returns true no sections remain
+            $zones.delete_zone(zone.guid)
+            Sketchup.active_model.selection.clear
+            @section = nil
+        end
+    end
+
     def create_start_point
         prompts = [$exStrings.GetString("X"),
                    $exStrings.GetString("Y"),
@@ -316,7 +358,7 @@ class AddSections
         if ( not results ) then return end 
         x, y, z, azimuth, new_section_type = results
         pt     = Geom::Point3d.new(x, y, z)
-        theta  = azimuth * 180.0 / PI
+        theta  = azimuth * PI / 180.0
         normal = Geom::Point3d.new(cos(theta), sin(theta), 0.0 )
         $current_connection_point = StartPoint.new(pt, normal)
         build_section(new_section_type)

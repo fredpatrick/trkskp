@@ -62,13 +62,16 @@ class Switches
             @switches_group.set_attribute("SwitchesAttributes", "switch_count", 0)
             @switch_count = 0
             @switches_group.name   = "switches"
+            @switches_group.make_unique
             @switches_group.locked = true
         else
             @switch_count = @switches_group.get_attribute("SwitchesAttributes", "switch_count")
         end
 
         puts "Switches.initialize, load existing switches"
-        @switches = Hash.new
+        @switches    = Hash.new
+        @@bases      = Hash.new
+        @@base_count = 0
         @switches_group.entities.each do |sg|
             if ( sg.is_a? Sketchup::Group )
                 if ( sg.name == "section" )
@@ -78,6 +81,11 @@ class Switches
                         @switches[switchsection.guid] = switchsection
                         switchsection.outline_visible(false)
                     end
+                elsif sg.name == "base"
+                    base               = Base.new(sg)
+                    @@bases[base.guid] = base
+                    @@base_count       = @@bases.length
+                    base.load_existing_base
                 end
             end
         end
@@ -167,8 +175,30 @@ class Switches
         return @switches[guid];
     end
 
+    def switch_count
+        return @switch_count
+    end
+
+    def create_base_for_switches
+        erase_base_groups
+        @switches.each_value do |s|
+            @base_group         = @switches_group.entities.add_group
+            @base_group.name    = "base"
+            @base               = Base.new(@base_group, self, s)
+        end
+    end
+    def erase_base_groups
+        @switches_group.entities.each do |e|
+            if e.is_a? Sketchup::Group
+                if e.name == "base"
+                    puts "create_base_for_switches, found existing base_group"
+                    e.erase!
+                end
+            end
+        end
+    end
+
     def export_layout_slices(vtxfile)
-        vtxfile.puts sprintf("switches %-20s %-s\n", "switch_count", @switch_count) 
         @switches.each_value do |s|
             s.export_ordered_slices(vtxfile, "A")
         end

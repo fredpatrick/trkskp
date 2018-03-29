@@ -45,6 +45,8 @@
 require 'sketchup.rb'
 require "#{$trkdir}/zones.rb"
 require "#{$trkdir}/section.rb"
+require "#{$trkdir}/base.rb"
+require "#{$trkdir}/trk.rb"
 
 
 ######################################################################## class Zone
@@ -52,18 +54,33 @@ require "#{$trkdir}/section.rb"
 ##
 ##
 class Zone
+include Trk
     def initialize(zone_group)
-        @zone_group = zone_group
-        @guid       = zone_group.guid
-        @zone_index = zone_group.get_attribute("ZoneAttributes", "zone_index")
-        @zone_name  = zone_group.get_attribute("ZoneAttributes", "zone_name")
-        puts "Zone.initialize, zone_index = #{@zone_index}, zone_name = #{@zone_name}"
-        @modified = true
-        @uclist   = []
-        @nuc      = 0
+        @zone_group  = zone_group
+        @guid        = zone_group.guid
+        @zone_index  = zone_group.get_attribute("ZoneAttributes", "zone_index")
+        @zone_name   = zone_group.get_attribute("ZoneAttributes", "zone_name")
+        @modified    = true
+        @uclist      = []
+        @nuc         = 0
+        @@bases      = Hash.new
+        @@base_count = 0
+
+    end
+    def Zone.base_path?(ph)
+        ans = search_paths(ph, "base")
+        if ans
+            base_group = ans[0]
+            face_code  = ans[1]
+            base = @@bases[base_group.guid]
+            base_data = [base, face_code]
+            return base_data
+        end
+        return nil
     end
 
     def load_existing_zone
+        puts "zone.load_existing_zone"
         @zone_type         = @zone_group.get_attribute("ZoneAttributes", "zone_type")
         @connected         = @zone_group.get_attribute("ZoneAttributes", "connected")
         @start_switch_guid = @zone_group.get_attribute("ZoneAttributes", "start_switch_guid")
@@ -72,20 +89,45 @@ class Zone
         @end_switch_tag    = @zone_group.get_attribute("ZoneAttributes", "end_switch_tag")
         @closed            = @zone_group.get_attribute("ZoneAttributes", "closed", false)
 
-        @sections      = Hash.new
-        @section_count = 0
+        @sections          = Hash.new
+        @section_count     = 0
         @zone_group.entities.each do |e|
             if ( e.is_a? Sketchup::Group )
-                if ( e.name == "section" )
-                    puts "Zone.load_existing_zone, e.guid = #{e.guid}"
+                if  e.name == "section" 
                     section = Section.factory(e)
                     @sections[section.guid] = section
                     @section_count = @sections.length
+                elsif e.name == "base"
+                    base               = Base.new(e)
+                    @@bases[base.guid] = base
+                    @@base_count       = @@bases.length
                 end
             end
         end
         @zone_group.set_attribute("ZoneAttributes", "section_count",     @section_count)
     end
+
+    def add_new_base
+        puts "zone.add_new_base,  #{@zone_name}"
+        @base_group        = @zone_group.entities.add_group
+        @base_group.name   = "base"
+        base               = Base.new(@base_group, self)
+        @@bases[base.guid] = base
+        @@base_count       = @@bases.length
+        puts "zone.create_base, Base created for #{@zone_name}"
+    end
+
+    def erase_base_groups
+        @zone_group.entities.each do |e|
+            if e.is_a? Sketchup::Group
+                if e.name == "base"
+                    puts "erase_base_groups, found existing base_group"
+                    e.erase!
+                end
+            end
+        end
+    end
+
 
     def zone_name
         return @zone_name
@@ -123,7 +165,7 @@ class Zone
         return @section_count
     end
     def guid
-        return @guid
+        return @zone_group.guid
     end
     def zone_group
         return @zone_group
@@ -149,10 +191,11 @@ class Zone
                 puts "Zone.load_new_zone, should not get here, connection point is not switch"
             end
         end
-        @valid     = true
-        @sections = Hash.new
+        @valid         = true
+        @sections      = Hash.new
         @section_count = 0
         @zone_group.set_attribute("ZoneAttributes", "section_count",     @section_count)
+        @zone_group.set_attribute("ZoneAttributes", "base_count",        @base_count)
         set_zone_attributes(@start_switch_guid, @start_switch_tag, "", "")
     end
 
@@ -162,9 +205,9 @@ class Zone
     end
 
     def add_section(connection_point, section_type)
-        puts "Zone.add_section, section_type = #{section_type}"
         section_group = @zone_group.entities.add_group
         section_group.name = "section"
+        section_group.make_unique
         section_group.locked = true
         section_group.set_attribute("SectionAttributes", "section_type", section_type)
         section_group.set_attribute("SectionAttributes", "zone_guid",    @guid)
@@ -179,42 +222,59 @@ class Zone
         return section
     end
 
-    def erase_section( section )
+    def erase_section( section )         # see pg54 2017/11/15
         puts "Zone.erase_section"
-        section_type = []
-        tag          = []
-        guid         = []
+        linked_section_types   = []
+        linked_tags            = []
+        linked_connector_guids = []
         n            = 0
         switch_guid  = ""
         section.connectors.each do |c|
             if ( c.connected? ) 
                 linked_section = c.linked_connector.parent_section
-                section_type[n] = linked_section.section_type
-                guid[n]         = c.linked_connector.guid
-                tag[n]          = c.linked_connector.tag
-                n               += 1
-                puts "Zone.erase_section, n = #{n}, type = #{section_type[n]}," +
-                                 " guid = #{guid[n]}, tag = #{tag[n]}"
-                if (section_type[n] == "switch")
-                    switch_guid = guid[n]
+                linked_section_types[n]   = linked_section.section_type
+                linked_connector_guids[n] = c.linked_connector.guid
+                linked_tags[n]            = c.linked_connector.tag
+                puts "Zone.erase_section, n = #{n}, type = #{linked_section_types[n]}," +
+                                 " guid = #{linked_connector_guids[n]}, tag = #{linked_tags[n]}"
+                $logfile.puts "Zone.erase_section, n = #{n}, type = #{linked_section_types[n]}," +
+                                 " guid = #{linked_connector_guids[n]}, tag = #{linked_tags[n]}"
+                $logfile.flush
+                if (linked_section_types[n] == "switch")
+                    switch_guid = linked_section.guid
+                    $logfile.puts "zone.erase_section, switch_guid updated = #{switch_guid}"
+                    $logfile.flush
                 end
+                n               += 1
                 c.break_connection_link
+                puts "Zone.erase_section, break_connection_link, #{c.label}, n=#{n}"
+                $logfile.puts "Zone.erase_section, break_connection_link, #{c.label}, n=#{n}"
+                $logfile.flush
             end
         end
-        if (delete_section_group(section.section_group) == 0 )
-            return true
+        $logfile.puts "zone.erase_section, switch_guid = #{switch_guid}"
+        $logfile.flush
+        if (delete_section_group(section.section_group) == 0 ) #delete_section_group returns
+            $logfile.puts"zone.erase_section, section_count in zone is 0"
+            $logfile.flush
+            return true                                        #@section_count
         end
 
+        $logfile.puts "zone.erase_section, switch_guid = #{switch_guid}"
+        $logfile.puts "zone.erase_section, start_switch_guid = #{start_switch_guid}"
+        $logfile.puts "zone.erase_section, end_switch_guid = #{end_switch_guid}"
+        $logfile.flush
         if ( n == 2 )                     # if n==0 || n==1 do nothing
-            if ( section_type[0] == "switch"  &&
-                 section_type[1] == "switch"    )
+            if ( linked_section_types[0] == "switch"  &&
+                 linked_section_types[1] == "switch"    )
                 #do nothing
             elsif (switch_guid == @start_switch_guid )
-                set_zone_attribute(@end_switch_guid, @end_switch_tag, "", "")
+                set_zone_attributes(@end_switch_guid, @end_switch_tag, "", "")
             elsif (switch_guid == @end_switch_quid  )
                 set_zone_attributes(@start_switch_guid, @start_switch_guid, "", "")
             elsif ( switch_guid == "" )
-                split_zone( guid )
+                split_zone( linked_connector_guids )
+                set_zone_attributes(@end_switch_guid, @end_switch_tag, "", "")
             end
         end
         return false
@@ -254,9 +314,6 @@ class Zone
     end
 
     def merge_zone(zoneb)
-        puts "Zone.merge_zone"
-        puts to_s("before merge_zone")
-        puts zoneb.to_s("before merge_zone")
         set_zone_attributes(@start_switch_guid,      @start_switch_tag,
                             zoneb.start_switch_guid,   zoneb.start_switch_tag  )
         $zones.remove_zone_entry(zoneb)
@@ -276,24 +333,23 @@ class Zone
         @section_count = @sections.length
         @zone_group.set_attribute("ZoneAttributes", "section_count",     @section_count)
 
-        puts to_s("after merge_zone")
         $zones.clense_after_explode
     end
 
-    def split_zone( guid )
-        puts "Zone.spit_zone, zone_name = #{@zone_name}," +
-                                     " guid[0] = #{guid[0]}, guid[1] = #{guid[1]}"
+    def split_zone( linked_connector_guids )
+        puts "zones.split_zone"
+        $logfile.puts "zones.split_zone"
         connector_e = traverse_zone                # Zone now contains 2 groups of sections
         guid_e      = connector_e.guid             # Each group or both may be connected to
-        guid_s      = guid[0]                      # switch. Use traverse_zone to select a 
-        if ( guid_e == guid[1] )                   # group. Other group will be in new zone
-            guid_s  = guid[1]
+        guid_s      = linked_connector_guids[0]    # switch. Use traverse_zone to select a 
+        if ( guid_e == linked_connector_guids[1] ) # group. Other group will be in new zone
+            guid_s  = linked_connector_guids[1]
         end
 
         connector_in = Connector.connector(guid_s)
         section      = nil
-        zone         = $zones.add_zone
-        zone.load_new_zone
+        new_zone     = $zones.add_zone
+        new_zone.load_new_zone
         while (true)
             if ( connector_in.nil? )
                 break
@@ -302,7 +358,7 @@ class Zone
             if ( section.section_type == "switch" )
                 break
             end
-            zone.copy_section_group(section.section_group)
+            new_zone.copy_section_group(section.section_group)
             delete_section_group(section.section_group)
             if ( connector_in.tag == "B" )
                 connector_out = section.connector("A")
@@ -313,11 +369,11 @@ class Zone
         end
 
         if ( !section.nil? )
-            zone.set_zone_attributes(section.guid, connector_in.tag, "", "")
+            new_zone.set_zone_attributes(section.guid, connector_in.tag, "", "")
         else
-            zone.set_zone_attributes("", "", "", "")
+            new_zone.set_zone_attributes("", "", "", "")
         end
-        return zone
+        return new_zone
     end
 
     def copy_section_group(from_section_group)  #Method can be called from other zones
@@ -346,15 +402,18 @@ class Zone
 
     def delete_section_group(section_group)    # Method can be called from other zones
         puts "Zone,delete_section_group, group guid = #{section_group.guid}"
+        $logfile.puts "Zone,delete_section_group, group guid = #{section_group.guid}"
+        $logfile.flush
         @sections.delete section_group.guid
         section_group.erase!
-        @section_count = @zone_group.entities.length
+        @section_count = @sections.length
         @zone_group.set_attribute("ZoneAttributes", "section_count", @section_count)
+        $logfile.puts "zone.delete_section_group, returning @section_count = #{@section_count}"
+        $logfile.flush
         return @section_count
     end
 
     def set_zone_attributes(swa_guid, taga, swb_guid, tagb)
-        puts "Zone.set_zone_attributes, #{swa_guid}, #{taga} #{swb_guid} #{tagb}"
 
         if (    swa_guid == "" && swb_guid == "")
             @start_switch_guid = ""
@@ -394,9 +453,7 @@ class Zone
     end
 
     def traverse_zone
-        puts "Zone.traverse_zone, zone_name = #{zone_name}, zone_count = #{@zone_count}"
         connector_in = find_start_connector
-        puts "Zone.traverse_zone, connector_in.guid = #{connector_in.guid}"
         section_index_z = 0
         connector_out = nil
         endflg = false
@@ -408,9 +465,18 @@ class Zone
             if (section.section_type == "switch" )
                 break
             end
-            section.update_ordered_attributes( section_index_z, connector_in.tag )
+            last = false
+            if section_index_z == @section_count -1
+                last = true
+            end
+            slice_ordered_z = "forward"
+            if connector_in.tag != "A"
+                slice_ordered_z = "reversed"
+            end
+            section.update_ordered_attributes( section_index_z, slice_ordered_z,
+                                               connector_in.tag )
+            yield section.section_group, last  if block_given?
             section_index_z += 1
-            puts "zone.traverse_zone, section_index_z = #{section_index_z}"
             if ( connector_in.tag == "A" )
                 connector_out = section.connector("B")
             else
@@ -427,6 +493,110 @@ class Zone
         end
         return connector_out
     end
+    def ordered_labels
+        labels = []
+        labels << @zone_name
+        puts @zone_name
+        if @start_switch_guid != ""
+            start_switch = $switches.switch(@start_switch_guid)
+            labels << start_switch.switch_name
+            connector_out = start_switch.connector(@start_switch_tag)
+            labels << connector_out.label
+            connector_in = connector_out.linked_connector
+        else
+            @uclist.clear
+            @nuc = 0
+            @sections.each_value do |s|
+                s.connectors.each do |c|
+                    if ( !c.connected? )
+                        @uclist[@nuc] =c
+                        @nuc +=1
+                    end
+                end
+            end
+            connector_in = @uclist[0]
+        end
+        connector_out = nil
+        endflg = false
+        while ( !endflg )
+            if ( connector_in.nil? )
+                break
+            end
+            labels << connector_in.label
+            section = connector_in.parent_section
+            if (section.section_type == "switch" )
+                labels << section.switch_name
+                break
+            end
+            if ( connector_in.tag == "A" )
+                connector_out = section.connector("B")
+            else
+                connector_out = section.connector("A")
+            end
+            labels << connector_out.label
+            connector_in = connector_out.linked_connector
+        end
+        labels.each do |l|
+            puts l
+        end
+        return labels
+    end
+
+    def section_range( section1, section2 )
+        puts "Zone.section_range, section1 section_index_z = #{section1.section_index_z}"
+        puts "Zone.section_range, section2 section_index_z = #{section2.section_index_z}"
+        connector_in  = find_start_connector
+        connector_out = nil
+        endflg        = false
+        sections      = []
+        looking       = true
+        if section1 == section2 
+            sections << section1
+            return sections
+        end
+        while !endflg
+            if connector_in.nil?
+                puts "Zone.section_range, connector_in is nil"
+                break
+            end
+            section = connector_in.parent_section
+            puts "Zone.section_range, section_index_g = #{section.section_index_g}" 
+            if section.section_type == "switch"
+                puts "Zone.section_range, section_type is switch"
+                break
+            end
+            if looking
+                if section == section1
+                    puts "Zone.section_range, section is section1"
+                    sections << section1
+                    end_section = section2
+                    looking     = false
+                    puts "Zone.section_range, sections length is#{sections.length}"
+                elsif section == section2
+                    puts "Zone.section_range, section is section2"
+                    sections    << section2
+                    end_section = section1
+                    looking     = false
+                    puts "Zone.section_range, sections length is#{sections.length}"
+                end
+            else
+                sections << section
+                puts "Zone.section_range, sections length is#{sections.length}"
+                if section == end_section
+                    return sections
+                end
+            end
+            if ( connector_in.tag == "A" )
+                connector_out = section.connector("B")
+            else
+                connector_out = section.connector("A")
+            end
+            connector_in = connector_out.linked_connector
+        end
+        return nil
+    end
+
+                    
     
     def export_layout_slices(vtxfile)
         vtxfile.puts sprintf("zone %-20s %s\n", "zone_name",         @zone_name)
@@ -477,7 +647,6 @@ class Zone
                     end
                 end
             end
-            puts "Zone.traverse_zone, nuc = #{@nuc}"
             connector_in = @uclist[0]
         end
         return connector_in
@@ -509,9 +678,9 @@ class Zone
     end
 
     def report_sections
-        #           012345678901234567890123456789012345678901234567890123456789
-        hdr_txt2 = "   Name          Type       Code        Slope-fwd   Index     Tag      Height    Height"
-        hdr_txt1 = "   Zone                                             Entry    Entry      Entry     Exit "
+        #           012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+        hdr_txt2 = "   Name     Type       Code              Slope-fwd Index   InLine     Height    Height"
+        hdr_txt1 = "   Zone                                            Entry               Entry     Exit "
         if $rptfile.nil?
             puts "\n\n Zone #{@zone_name} by section"
             puts hdr_txt1
@@ -523,16 +692,25 @@ class Zone
         end
         puts hdr_txt1
         puts hdr_txt2
+        ordered_sections = Array.new
         @sections.each_value do |s|
+            sgi = s.section_index_z
+            ordered_sections[sgi] = s
+        end
+        d = 0.0
+        ordered_sections.each do |s|
             slope = s.slope
             if s.entry_tag != "A"
                 slope = -slope
             end
-            ha = s.connector(s.entry_tag).position(true).z
-            hb = s.connector(s.exit_tag).position(true).z
-            str = sprintf("%-15s %-8s  %-10s %10.5f %7d %8s  %10s %10s",
+            dd = s.inline_length
+            d  = d + dd
+            hx = s.connector(s.exit_tag).position(true).x
+            hy = s.connector(s.exit_tag).position(true).y
+            hz = s.connector(s.exit_tag).position(true).z
+            str = sprintf("%-10s %-8s  %-16s %9.4f %5d %5.1f %5.1f  %14s %14s %14s",
                    s.zone.zone_name, s.section_type, s.code, slope, 
-                                   s.section_index_z, s.entry_tag, ha.to_s, hb.to_s)
+                                   s.section_index_z, dd, d, hx.to_s, hy.to_s, hz.to_s)
             puts str
             $rptfile.puts str
         end

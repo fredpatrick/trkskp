@@ -55,6 +55,7 @@ require "#{$trkdir}/trk.rb"
 ##
 class Zone
 include Trk
+
     def initialize(zone_group)
         @zone_group  = zone_group
         @guid        = zone_group.guid
@@ -63,16 +64,14 @@ include Trk
         @modified    = true
         @uclist      = []
         @nuc         = 0
-        @@bases      = Hash.new
-        @@base_count = 0
-
+        @base        = nil
     end
     def Zone.base_path?(ph)
-        ans = search_paths(ph, "base")
+        ans = search_paths_for_face(ph, "base")
         if ans
             base_group = ans[0]
             face_code  = ans[1]
-            base = @@bases[base_group.guid]
+            base = Base.base[base_group.guid]
             base_data = [base, face_code]
             return base_data
         end
@@ -80,7 +79,7 @@ include Trk
     end
 
     def load_existing_zone
-        puts "zone.load_existing_zone"
+        $logfile.puts "zone.load_existing_zone"
         @zone_type         = @zone_group.get_attribute("ZoneAttributes", "zone_type")
         @connected         = @zone_group.get_attribute("ZoneAttributes", "connected")
         @start_switch_guid = @zone_group.get_attribute("ZoneAttributes", "start_switch_guid")
@@ -97,10 +96,14 @@ include Trk
                     section = Section.factory(e)
                     @sections[section.guid] = section
                     @section_count = @sections.length
-                elsif e.name == "base"
-                    base               = Base.new(e)
-                    @@bases[base.guid] = base
-                    @@base_count       = @@bases.length
+                end
+            end
+        end
+        @zone_group.entities.each do |e|
+            if ( e.is_a? Sketchup::Group )
+                if e.name == "base"
+                    @base              = Base.factory(e)
+                    @base.load_existing_base
                 end
             end
         end
@@ -108,24 +111,22 @@ include Trk
     end
 
     def add_new_base
-        puts "zone.add_new_base,  #{@zone_name}"
+        puts "zone.add_new_base"
         @base_group        = @zone_group.entities.add_group
         @base_group.name   = "base"
-        base               = Base.new(@base_group, self)
-        @@bases[base.guid] = base
-        @@base_count       = @@bases.length
-        puts "zone.create_base, Base created for #{@zone_name}"
+        @base              = Base.factory(@base_group, self)
     end
 
-    def erase_base_groups
-        @zone_group.entities.each do |e|
-            if e.is_a? Sketchup::Group
-                if e.name == "base"
-                    puts "erase_base_groups, found existing base_group"
-                    e.erase!
-                end
-            end
+    def erase_base
+        puts "zone.erase_base"
+        if !@base.nil?
+            Base.erase_base(@base)
+            @base = nil
         end
+    end
+
+    def report_slice_data
+        @base.report_slice_data
     end
 
 
@@ -169,6 +170,9 @@ include Trk
     end
     def zone_group
         return @zone_group
+    end
+    def base
+        return @base
     end
 
     def load_new_zone(connection_point=nil)
@@ -223,7 +227,7 @@ include Trk
     end
 
     def erase_section( section )         # see pg54 2017/11/15
-        puts "Zone.erase_section"
+        $logfile.puts "Zone.erase_section"
         linked_section_types   = []
         linked_tags            = []
         linked_connector_guids = []

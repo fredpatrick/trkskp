@@ -78,7 +78,6 @@ class AddSections
         end 
 
         @cursor_id = @cursor_looking
-        define_onRButtonDown
         @istate = 0 
     end
 
@@ -108,6 +107,8 @@ class AddSections
         @ptLast = Geom::Point3d.new 1000, 1000, 1000
 
         @drawn = false
+        Sketchup.active_model.active_view.invalidate
+        puts "#{Sketchup.active_model.active_view.to_s}"
     end
 
     def deactivate(view)
@@ -127,18 +128,11 @@ class AddSections
         npick = @ph.do_pick(x, y)
 
         if npick > 0 
-#           allp = @ph.all_picked
-#           puts "npick = #{npick}"
-#           allp.each do |e|
-#               puts e.typename
-#           end
-            
             path = @ph.path_at(0)
             section = Section.section_path?(path)
             cpt = nil
             if section
                 tposition = @ip_xform * @ip.position
-                #puts "AddSection.onMouseMove, tposition = #{tposition.to_s}"
                 cpt = section.closest_point(tposition)
                 if cpt.nil?
                     #puts "AddSections.onMouseMove, closest_point returned nil"
@@ -153,15 +147,12 @@ class AddSections
                     undef getMenu
                     @cursor_id = @cursor_looking
                     @menu_flg = false
-                    define_onRButtonDown
                 end
             else
                 @section = section
                 $current_connection_point = cpt
-                #puts "AddSections.onMouseMove, current_connection_point,menuflg = #{@menu_flg}"
                 @cursor_id = @cursor_on_target
                 if @menu_flg == false
-                    undef onRButtonDown
                     make_context_menu
                     @menu_flg = true
                 end
@@ -170,7 +161,6 @@ class AddSections
             if @menu_flg == true
                 undef getMenu
                 @cursor_id = @cursor_looking
-                define_onRButtonDown
                 @menu_flg = false
             end
         end
@@ -227,13 +217,13 @@ class AddSections
                 puts "onMouseMove-Close, deactivating conext menu"
                 undef getMenu
                 @cursor_id = @cursor_looking
-                define_onRButtonDown
                 @menu_flg = false
             }
         end
     end
 
     def build_section(new_section_type)
+        $zones.erase_bases
         ccpt = $current_connection_point
         puts "AddSections.build_section,####################################################" +
                        "#  #{new_section_type}"
@@ -323,11 +313,11 @@ class AddSections
         if @menu_flg
             undef getMenu
             @menu_flg = false
-            define_onRButtonDown
         end
     end
 
     def erase_section
+        $zones.erase_bases
         if ( @section.nil? )
             return
         end
@@ -345,6 +335,10 @@ class AddSections
         end
     end
 
+    def onLButtonDown(flags, x, y, view)
+        create_start_point
+    end
+
     def create_start_point
         prompts = [$exStrings.GetString("X"),
                    $exStrings.GetString("Y"),
@@ -359,18 +353,12 @@ class AddSections
         x, y, z, azimuth, new_section_type = results
         pt     = Geom::Point3d.new(x, y, z)
         theta  = azimuth * PI / 180.0
-        normal = Geom::Point3d.new(cos(theta), sin(theta), 0.0 )
+        normal = Geom::Vector3d.new(cos(theta), sin(theta), 0.0 )
         $current_connection_point = StartPoint.new(pt, normal)
         build_section(new_section_type)
         @cursor_id = @cursor_looking
     end
 
-    def define_onRButtonDown
-        #puts "define_onRButtonDown"
-        def onRButtonDown(flags, x, y, view)
-            create_start_point
-        end
-    end
 end #end of Class AddSections
 ######################################################################### class Inventory
 class Inventory

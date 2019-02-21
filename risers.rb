@@ -46,6 +46,7 @@
 require 'sketchup.rb'
 require "#{$trkdir}/base.rb"
 require "#{$trkdir}/riser.rb"
+require "#{$trkdir}/risershim.rb"
 require "#{$trkdir}/trk.rb"
 
 include Math
@@ -53,6 +54,7 @@ include Trk
 
 class Risers
     def initialize
+        puts "Risers.initialize"
         @risers = Hash.new
         @risers_group = nil
         Sketchup.active_model.entities.each do |e|
@@ -64,6 +66,7 @@ class Risers
             end
         end
         if @risers_group.nil? 
+            puts "Risers.initialize-0"
             @risers_group      = Sketchup.active_model.entities.add_group
             @risers_group.name = "risers"
             @risers_group.description = "group risers"
@@ -72,13 +75,17 @@ class Risers
             @riser_count       = 0
             @risers_group.set_attribute("RisersAttributes", "riser_count", 0)
         else
-            @riser_count       = @risers_group.get_attribute("RisersAttributes", 
-                                                            "riser_count")
+            @riser_count        = @risers_group.get_attribute("RisersAttributes", "riser_count")
             @risers_group.entities.each do |e|
                 if e.is_a? Sketchup::Group
                     if e.name == "riser"
-                        riser =Riser.new("load", e)
-                        @risers[e.guid] = riser
+                        riser_group = e
+                        riser       = Riser.new( riser_group)
+                        @risers[riser_group.guid] = riser
+                    elsif e.name == "risershim"
+                        risershim_group = e
+                        risershim   = RiserShim.new(risershim_group)
+                        @risers[risershim_group.guid] = risershim
                     end
                 end
             end
@@ -108,157 +115,69 @@ class Risers
         return face
     end
 
-    def create_new_riser(risertab)
-        riser_group      = @risers_group.entities.add_group
-        riser_group.name = "riser"
-        riser_group.set_attribute("RiserBaseAttributes", "complete", false)
-        riser = Riser.new("build", riser_group, risertab)
+    def erase_all_risers
+        @risers.each_pair do |key, value|
+            riser = value
+            riser.erase
+        end
+        @risers.clear
+    end
+
+    def delete_riser(riser_group)
+        guid  = riser_group.guid
+        riser = @risers[guid]
+        riser.erase
+        @risers.delete guid
+    end
+
+    def bounding_box_to_s(bb, label)
+        str = "######################## BoundingBox for #{label} ##########################"
+        str += "    min      = #{bb.min}\n"
+        str += "    max      = #{bb.max}\n"
+        str += "    width    = #{bb.width}\n"
+        str += "    height   = #{bb.height}\n"
+        str += "    depth    = #{bb.depth}\n"
+        str += "###########################################################################"
+        return str
+    end
+
+    def create_new_riser(base, basedata, riser_defs, structure_h, stop_after_build)
+        riser_group  = @risers_group.entities.add_group
+
+        attach_point = basedata["attach_point"]
+        rc_def = riser_defs["risercraddle_p"]
+        rb_def = riser_defs["riserbase_b"]
+        rc_thickness = rc_def.get_attribute("RiserConnectorAttrs", "thickness")
+        rb_depth     = rb_def.bounds.depth
+        puts "risers.create_new_riser, structure_h    = #{structure_h}, \n" +
+                                      "rc_thickness   = #{rc_thickness}, \n" +
+                                      "rb_depth       = #{rb_depth}, \n" +
+                                      "attach_point   = #{attach_point}\n" +
+                                      "attach_point.z = #{attach_point.z} \n" 
+        cl = attach_point.z - rc_thickness - 2 * rb_depth - structure_h
+        puts "risers.create_new_riser, cl = #{cl}"
+        if cl > 0.5
+            puts "risers.create_new_riser, creating Riser"
+
+            riser_group.name = "riser"
+            riser = Riser.new(riser_group, @riser_count,
+                            base, basedata, riser_defs,
+                            structure_h, stop_after_build)
+        else
+            puts "risers.create_new_riser, creating RiserShim"
+
+            riser_group.name = "risershim"
+            riser            = RiserShim.new(riser_group, @riser_count,
+                                             base, basedata, structure_h)
+        end
         @risers[riser_group.guid] = riser
+        @riser_count += 1
+        @risers_group.set_attribute("RisersAttributes", "riser_count", @riser_count)
+
         return riser
     end
-end
 
-class AddRiser
-    def initialize
-        puts "AddRiser.initialize"
-        TrackTools.tracktools_init("AddRiser")
-
-        cursor_path = Sketchup.find_support_file("riser_cursor_0.png",
-                                                 "Plugins/xc_tracktools/")
-        if cursor_path
-            @cursor_looking = UI.create_cursor(cursor_path, 16, 16) 
-        else
-            UI.messagebox("Couldnt get cursor_path")
-            return
-        end 
-        cursor_path = Sketchup.find_support_file("riser_cursor_1.png", 
-                                                 "Plugins/xc_tracktools/")
-        if  cursor_path
-            @cursor_on_target = UI.create_cursor(cursor_path, 16, 16) 
-        else
-            UI.messagebox("Couldnt get cursor_path")
-            return
-        end 
-        @cursor_id = @cursor_looking
-        @state     = "begin"
-        @on_target = false
-        make_context_menu
+    def riser(guid)
+        return @risers[guid]
     end
-
-    def onSetCursor
-        if @cursor_id
-            UI.set_cursor(@cursor_id)
-        end
-    end
-
-    def activate
-        $logfile.puts "############################# activate AddRiser #{Time.now.ctime}"
-        puts          "############################# activate AddRiser #{Time.now.ctime}"
-        @ip_xform = $zones.zones_group.transformation.clone
-        @ip_xform.invert!
-        @ip = Sketchup::InputPoint.new
-        @menu_flg = false
-        @ptLast = Geom::Point3d.new 1000, 1000, 1000
-        save_layer_state
-
-        #rstatus = AddRiser.member_defined?("onRButtonDown")
-        #puts "addriser.activate, onRButtonDown = ${rstatus}"
-    end
-
-    def deactivate(view)
-        $logfile.puts "############################ deactivate AddRiser #{Time.now.ctime}"
-        puts          "############################ deactivate AddRiser #{Time.now.ctime}"
-        $logfile.flush
-        restore_layer_state
-    end
-
-    def onMouseMove( flags, x, y, view)
-        @ip.pick view, x, y
-        @ph = view.pick_helper
-        npick = @ph.do_pick(x, y)
-
-        if npick > 0
-            if @state == "begin"
-                risertab = Base.risertab_path?(@ph)
-                if risertab
-                    @risertab = risertab
-                    @cursor_id = @cursor_on_target
-                    @on_target = true
-                    #test_for_onRButtonDown
-                    make_context_menu
-                    #AddRiser.member_defined?(:onRButtonDown)
-                end
-            end
-        end
-    end
-
-    #def test_for_onRButtonDown
-    #    status = AddRiser.member_defined?(:onRButtonDown)
-    #    puts "addriser.test_for_onRButtonDown, defined = #{status}"
-    #end
-    
-    def onLButtonDown(flags, x, y, view)
-        puts "AddRiser, onLButtonDown"
-        if @state == "begin" && @on_target
-            if @risertab
-                begin
-                    @riser = $risers.create_new_riser(@risertab)
-                    @cursor_id = @cursor_looking
-                    @state     = "riser_created"
-                rescue => ex
-                    puts ex.to_s
-                    $logfile.puts ex.to_s
-                    trace = ex.backtrace
-                    trace.each{ |s|
-                        puts s
-                        $logfile.puts s
-                    }
-                    Sketchup.active_model.tools.pop_tool
-                end
-            end
-        end
-    end
-
-    def make_context_menu
-        def getMenu(menu)
-            create_riser_id = menu.add_item("Creater Riser") {
-                @mouse_mode = "looking_for_risertab"
-            }
-            edit_base_def_id = menu.add_item("Edit Base Def") {
-                @mouse_mode = "not_looking"
-                @riser.edit_base_def
-            }
-            add_riserbase_id = menu.add_item("Add RiserBase") {
-                @mouse_mode = "not_looking" 
-                @riser.create_riserbase_instance
-            }
-            finish_id = menu.add_item("Finish") {
-                @mouse_mode = "not_looking" 
-                @riser.create_insert
-                @riser.move_to_risertab
-            }
-            if @state == "begin"
-                menu.set_validation_proc(create_riser_id) {MF_ENABLED}
-                menu.set_validation_proc(edit_base_def_id) {MF_ENABLED}
-                menu.set_validation_proc(add_riserbase_id) {MF_GRAYED}
-                menu.set_validation_proc(finish_id) {MF_GRAYED}
-            elsif @state == "riser_created"
-                menu.set_validation_proc(create_riser_id) {MF_GRAYED}
-                menu.set_validation_proc(edit_base_def_id) {MF_ENABLED}
-                menu.set_validation_proc(add_riserbase_id) {MF_ENABLED}
-                menu.set_validation_proc(finish_id) {MF_GRAYED}
-            elsif @state == "adding_bases"
-                menu.set_validation_proc(create_riser_id) {MF_GRAYED}
-                menu.set_validation_proc(edit_base_def_id) {MF_GRAYED}
-                menu.set_validation_proc(add_riserbase_id) {MF_ENABLED}
-                menu.set_validation_proc(finish_id) {MF_GRAYED}
-            elsif @state == "bases_created"
-                menu.set_validation_proc(create_riser_id) {MF_GRAYED}
-                menu.set_validation_proc(edit_base_def_id) {MF_GRAYED}
-                menu.set_validation_proc(add_riserbase_id) {MF_ENABLED}
-                menu.set_validation_proc(finish_id) {MF_ENABLED}
-            end
-
-        end
-    end
-end        
+end #end of class Risers

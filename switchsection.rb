@@ -222,13 +222,6 @@ class SwitchSection < Section
         @@model.set_attribute("TrackAttributes", "switch_count", @@switch_count)
         @section_index_g = section_index_g
         @section_group.set_attribute(sname, "section_index_g",  @section_index_g)
-        lpts = []
-        np = @@bed_profile.length
-        i = 0
-        while i < np do
-            lpts[i] = @@bed_profile[i].transform @xform_alpha
-            i += 1
-        end
     # Build straight section bed and ties
         body_group = @section_group.entities.add_group
         body_group.name = "track"
@@ -237,7 +230,7 @@ class SwitchSection < Section
         footprnt_group.name= "footprint"
         footprnt_group.layer= "footprint"
 
-        pz = (target_point.position true).z
+        pz = target_point.position.z
         p0 = Geom::Point3d.new(@@bed_profile[0].x, @@bed_profile[0].y, 0.0)
         p2 = Geom::Point3d.new(@@bed_profile[2].x, @@bed_profile[2].y, 0.0)
         ts = Geom::Transformation.translation([0.0, len_straight, dh])
@@ -260,84 +253,95 @@ class SwitchSection < Section
         end
         footprnt_group.entities.add_edges(q0, q2)
         
-        cpts = []
-        rpts = StraightSection.extend_profile(section_group, body_group,
-                                              n_ties_straight,
-                                              lpts,
-                                              @xform_bed,
-                                              @@bed_mat,
-                                              true,
-                                              cpts)
+        lpts = []
+        rpts = []
+        @@bed_profile.each_with_index { |p,i| lpts[i] = p.transform(@xform_alpha) }
+        face_A = body_group.entities.add_face(lpts)
+        lpts.each_with_index { |p,i| rpts[i] = p.transform(@xform_bed) }
+        Section.add_straight_faces(body_group.entities, lpts, rpts, @@bed_mat)
+        face_B = body_group.entities.add_face(rpts)
+
+        vs = rpts[3] - lpts[3]
+        dt = (vs.length) / @n_ties_arc
+        v1 = vs
+        v1.length = dt
+        np = lpts.length
+        bpts = []
+        bpts[0] = lpts[np-1]
+        bpts[1] = lpts[np-2]
+        @n_ties_arc.times do |j|
+            bpts[2] = bpts[1] + v1
+            bpts[3] = bpts[0] + v1
+            Section.make_tie( body_group.entities, bpts)
+            bpts[1] = bpts[2]
+            bpts[0] = bpts[3]
+        end
+
      # add section rails
         rh = @@bed_h + @@tie_h
-        nr = 0
-        while nr < 3
-            offset = Geom::Vector3d.new( (nr-1)*0.6875, 0, rh)
-            lpts = []
+        3.times do |j|
+            offset = Geom::Vector3d.new( (j-1)*0.6875, 0, rh)
+            lpts = Array.new
+            rpts = Array.new
             np = @@rail_profile.length
-            i = 0
-            while i < np do
-                lpts[i] = @@rail_profile[i].transform @xform_alpha
-                lpts[i] = lpts[i] + offset
-                i += 1
-            end
-            StraightSection.extend_profile(section_group, body_group,
-                                           n_ties_straight,
-                                           lpts,
-                                           @xform_bed,
-                                           @@rail_mat, 
-                                           false,
-                                           cpts)
-            nr += 1
+            @@rail_profile.each_with_index { |p,i| lpts[i] = p.transform(@xform_alpha)+offset }
+            lpts.each_with_index { |p,i| rpts[i] = p.transform(@xform_bed) }
+            Section.add_straight_faces(body_group.entities, lpts, rpts, @@rail_mat)
         end
 
     # Build curved section bed and ties
         offset = Geom::Vector3d.new(0, a, a * @slope)
         kpts = []
-        np = @@bed_profile.length
-        i = 0
-        while i < np do
-            kpts[i] = @@bed_profile[i].transform @xform_alpha
-            kpts[i] = kpts[i] + offset
-            i += 1
+        @@bed_profile.each_with_index { |p,i| kpts[i] = p.transform(@xform_alpha) }
+        n = @@bed_profile.length
+        @n_ties_arc.times do |j|
+            kpts.each_with_index { |p,i| rpts[i] = p.transform(@xform_bed_arc) }
+            Section.add_faces(body_group.entities, kpts, rpts, @@bed_mat)
+            Section.make_tie(body_group.entities, [kpts[n-1], kpts[n-2], rpts[n-2], rpts[n-1] ])
+            rpts.each_with_index { |p,i| kpts[i] = p}
         end
-        rpts = CurvedSection.extend_profile(section_group, body_group,
-                                            @n_ties_arc,
-                                            kpts,
-                                            @xform_bed_arc,
-                                            @@bed_mat,
-                                            true,
-                                            cpts,
-                                            first_tie)
+        face_C = body_group.entities.add_face(rpts)
 
-     # add section rails
-        nr = 0
-        while nr < 3
-            offset = Geom::Vector3d.new( (nr-1)*0.6875, 
-                                        a, 
-                                        @@bed_h + @@tie_h + a *  @slope)
-            kpts = []
-            np = @@rail_profile.length
-            i = 0
-            while i < np do
-                kpts[i] = @@rail_profile[i].transform @xform_alpha
-                kpts[i] = kpts[i] + offset
-                i += 1
+        3.times do |j|
+            offset = Geom::Vector3d.new( (j-1)*0.6875, 
+                                        0, 
+                                        @@bed_h + @@tie_h)
+            lpts = Array.new
+            rpts = Array.new
+            @@rail_profile.each_with_index {|p,i| lpts[i] = p.transform(@xform_alpha) + offset }
+            @n_ties_arc.times do |j|
+                lpts.each_with_index { |p,i| rpts[i] = p.transform(@xform_bed_arc) }
+                Section.add_faces(body_group.entities, lpts, rpts, @@rail_mat)
+                rpts.each_with_index { |p,i| lpts[i] =p}
             end
-            CurvedSection.extend_profile(section_group, body_group,
-                                         @n_ties_arc,
-                                         kpts,
-                                         @xform_bed_arc,
-                                         @@rail_mat, 
-                                         false,
-                                         cpts)
-            nr += 1
         end
 
+        face_cnnct = nil
+        if @tag_cnnct == "A"
+            face_cnnct = face_A
+        elsif @tag_cnnct == "B"
+            face_cnnct = face_B
+        elsif @tag_cnnct == "C"
+            face_cnnct = face_C
+        end
+
+        source_position, source_normal, source_theta = face_position(face_cnnct)
+        target_position = target_point.position
+        target_normal   = target_point.normal
+        puts "switchsection, source_position = #{source_position}"
+        puts "switchsection, source_normal   = #{source_normal}"
+        puts "switchsection, source_theta    = #{source_theta}"
+        puts "switchsection, target_position = #{target_position}"
+        puts "switchsection, target_normal   = #{target_normal}"
+        xform = make_transformation(target_position, target_normal, 
+                                    source_position, source_normal)
+        @section_group.transformation = xform
+
+        cpts = []
+        cpts[0] = Connector.factory(section_group, "A", face_A)
+        cpts[1] = Connector.factory(section_group, "B", face_B)
+        cpts[2] = Connector.factory(section_group, "C", face_C)
         self.connectors = cpts                                    
-        section_point = connector(@tag_cnnct)
-        tr_group = make_tr_group(target_point,section_point)
-        @section_group.transformation = tr_group
 
         if @tag_cnnct == "A"
             connector("A").make_connection_link(target_point)
@@ -617,19 +621,19 @@ class SwitchSection < Section
         return str
     end
 
-    def create_base_for_switch
-        @section_group.entities.each do |e|
-            if e.is_a? Sketchup::Group
-                if e.name == "base"
-                    puts "create_base_for_switch, found existing base_group"
-                    e.erase!
-                end
-            end
-        end
-        @base_group         = @section_group.entities.add_group
-        @base_group.name    = "base"
-        @base               = Base.new(@base_group, self)
-    end
+#   def create_base_for_switch
+#       @section_group.entities.each do |e|
+#           if e.is_a? Sketchup::Group
+#               if e.name == "base"
+#                   puts "create_base_for_switch, found existing base_group"
+#                   e.erase!
+#               end
+#           end
+#       end
+#       @base_group         = @section_group.entities.add_group
+#       @base_group.name    = "base"
+#       @base               = Base.new(@base_group, self)
+#   end
 
     def make_switch_geometry(slices_group, section_group, profile)
 

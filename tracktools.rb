@@ -49,18 +49,24 @@ module TrackTools
 
 $trkdir = "/Users/fredpatrick/wrk/trkskp"
 puts $trkdir
+require "#{$trkdir}/trk.rb"
 require "#{$trkdir}/addsections.rb"
 require "#{$trkdir}/addrisertab.rb"
+require "#{$trkdir}/addriser.rb"
+require "#{$trkdir}/analysis.rb"
+require "#{$trkdir}/definitionmanager.rb"
+require "#{$trkdir}/deleteriser.rb"
+require "#{$trkdir}/editriser.rb"
 require "#{$trkdir}/erasesectionrange.rb"
-require "#{$trkdir}/editsections.rb"
-require "#{$trkdir}/scanlayout.rb"
 require "#{$trkdir}/editnames.rb"
 require "#{$trkdir}/infotool.rb"
 require "#{$trkdir}/testtool.rb"
 #require "#{$trkdir}/gates.rb"
 require "#{$trkdir}/switches.rb"
 require "#{$trkdir}/risers.rb"
+require "#{$trkdir}/risercraddle.rb"
 require "#{$trkdir}/zone.rb"
+require "#{$trkdir}/dump_risercolumn.rb"
 
 def TrackTools.tracktools_init(tool_classname)
     model_path = Sketchup.active_model.path
@@ -80,7 +86,8 @@ def TrackTools.tracktools_init(tool_classname)
     $logfile.puts "####################################### #{tool_classname}"
     $logfile.puts "####################################### #{Time.now.ctime}"
     $logfile.flush
-    Sketchup.active_model.add_observer(TrackModelObserver.new)
+#   Sketchup.active_model.add_observer(TrackModelObserver.new)
+    puts Sketchup.active_model.active_view.to_s
     rendering_options = Sketchup.active_model.rendering_options
     rendering_options["EdgeColorMode"] = 0
     $logfile.puts "EdgeColorMode: #{rendering_options["EdgeColorMode"]}"
@@ -96,7 +103,7 @@ def TrackTools.tracktools_init(tool_classname)
     vmenu = UI.menu("View")
     vmenu.set_validation_proc($view_zones_id) { MF_ENABLED }
     vmenu.set_validation_proc($view_zones_id) { MF_CHECKED }
-    $zones.print_zone_labels
+#   $zones.print_zone_labels
 end  # end tracktools_init
 
 def TrackTools.create_directory_attributes
@@ -108,12 +115,12 @@ def TrackTools.create_directory_attributes
         battrs = Sketchup.active_model.attribute_dictionary("DirectoryAttributes", true)
     end
     if model_name == ""  || battrs.length == 0
-        model_name = "noname"
+        model_name = "noname___________________"
         @@home_directory  = ENV["HOME"]
         @@work_directory  = "wrk/skp"
         @@model_directory = ""
 
-        prompts =["Model Name", "Home Directory", "Work Directory", "Model Directory"]
+        prompts =["ModelName", "HomeDirectory", "WorkDirectory", "ModelDirectory"]
         title   = "Enter Base Attribute Values"
         okflg   = false
         while !okflg
@@ -139,6 +146,8 @@ def TrackTools.create_directory_attributes
         Sketchup.active_model.set_attribute(bname, "home_directory",  @@home_directory)
         Sketchup.active_model.set_attribute(bname, "work_directory",  @@work_directory)
         Sketchup.active_model.set_attribute(bname, "model_directory", @@model_directory)
+
+        #TrackTools.load_definitions()
         model_dir = File.join(@@home_directory, @@work_directory, @@model_directory)
         if !Dir.exists?(model_dir)
             Dir.mkdir(model_dir)
@@ -173,6 +182,49 @@ end
 
 def TrackTools.working_path
     return File.join(@@home_directory, @@work_directory)
+end
+
+def TrackTools.load_definitions
+    puts "TrackTools.load_definitions"
+    result = UI.messagebox("Load Component Definitions?", MB_YESNO)
+    if result == IDYES
+        dirname  = UI.select_directory(directory: "#{ENV['HOME'] + '/wrk/skp'}")  
+        filnames = TrackTools.make_filenames(dirname)
+        puts "select_definition, filnames = #{filnames}"
+        title    = "Select File from #{dirname}"
+        results  = UI.inputbox ["filname"], [" "], [filnames], title
+        return nil if results == false
+
+        filname  = results[0]
+        puts "select_definition, filname = #{filname}"
+
+        definitions = Sketchup.active_model.definitions
+
+        definitions.load(filname)
+    end
+end
+def TrackTools.make_filenames(dirname)
+    if !Dir.exist?(dirname) then return "" end
+    Dir.chdir(dirname)
+    fs = Dir['*.skp']
+    fs.each_with_index do |f,i| 
+        fb = File.basename(f, '.skp')
+        ib = fb.index('~')
+        if !ib.nil? then fs[i] = "" end
+    end
+    fnames = " "
+    i = 0
+    fs.each do |f|
+        if f != ""
+            if i == 0
+                fnames = f
+            else
+                fnames += "|" + f
+            end
+            i += 1
+        end
+    end
+    return fnames
 end
 
 def TrackTools.model_summary
@@ -244,20 +296,6 @@ if( not $draw_tracktool_createbase_loaded )
     $draw_tracktool_createbase_loaded = true
 end
 
-if( not $draw_tracktool_addrisertab_loaded )
-    $draw_submenu_track.add_item("Add RiserTab") {
-        Sketchup.active_model.select_tool AddRiserTab.new
-    }
-    $draw_tracktool_addrisertab_loaded = true
-end
-
-if( not $draw_tracktool_mangedefinitions_loaded )
-    $draw_submenu_track.add_item("Manage Definitions") {
-        Sketchup.active_model.select_tool ManageDefinitions.new
-    }
-    $draw_tracktool_mangedefinitions_loaded = true
-end
-
 if( not $draw_tracktool_addriser_loaded )
     $draw_submenu_track.add_item("Add Riser") {
         Sketchup.active_model.select_tool AddRiser.new
@@ -265,40 +303,39 @@ if( not $draw_tracktool_addriser_loaded )
     $draw_tracktool_addriser_loaded = true
 end
 
-if( not $draw_tracktool_editriserbase_loaded )
-    $draw_submenu_track.add_item("Edit Riser Base") {
-        Sketchup.active_model.select_tool EditRiserBase.new
+if( not $draw_tracktool_deleteriser_loaded )
+    $draw_submenu_track.add_item("Delete Riser") {
+        Sketchup.active_model.select_tool DeleteRiser.new
     }
-    $draw_tracktool_editriserbase_loaded = true
+    $draw_tracktool_deleteriser_loaded = true
 end
 
-if( not $draw_track_editsections_loaded )
-    $draw_submenu_track.add_item("Edit Sections") {
-        Sketchup.active_model.select_tool EditSections.new
+if( not $draw_tracktool_editriser_loaded )
+    $draw_submenu_track.add_item("Edit Riser") {
+        Sketchup.active_model.select_tool EditRiser.new
     }
-    $draw_track_editsections_loaded = true
+    $draw_tracktool_editriser_loaded = true
 end
 
-if( not $draw_track_scanlayout_loaded )
-    $draw_submenu_track.add_item("Scan") {
-        Sketchup.active_model.select_tool ScanLayout.new
+if( not $draw_tracktool_analysis_loaded )
+    $draw_submenu_track.add_item("Analysis") {
+        Sketchup.active_model.select_tool Analysis.new
     }
-    $draw_track_scanlayout_loaded = true
+    $draw_tracktool_analysis_loaded = true
 end
 
-if( not $draw_track_editnames )
+if( not $draw_tracktool_apply_xform )
+    $draw_submenu_track.add_item("Apply Xform") {
+        Sketchup.active_model.select_tool ApplyXform.new
+    }
+    $draw_tracktool_apply_xform = true
+end
+
+if( not $draw_track_editnames_loaded )
     $draw_submenu_track.add_item("Edit Names") {
         Sketchup.active_model.select_tool EditNames.new
     }
     $draw_track_editnames_loaded = true
-end
-
-if( not $draw_tracktool_updatelayoutdata_loaded )
-    $draw_submenu_track.add_separator
-    $draw_submenu_track.add_item("Update Layout Data") {
-        Sketchup.active_model.select_tool UpdateLayoutData.new
-    }
-    $draw_tracktool_updatelayoutdata_loaded = true
 end
 
 if( not $draw_tracktool_exportlayoutdata_loaded )
@@ -316,11 +353,32 @@ if( not $draw_tracktool_export_layout_report_loaded )
     $draw_tracktool_export__layout_report_loaded = true
 end
 
+if( not $draw_tracktool_report_slice_data_loaded )
+    $draw_submenu_track.add_item("Report Slice Data") {
+        Sketchup.active_model.select_tool ReportSliceData.new
+    }
+    $draw_tracktool_report_slice_data_loaded = true
+end
+
+if( not $draw_tracktool_camera_parms_loaded)
+    $draw_submenu_track.add_item("Camera Parms") {
+        Sketchup.active_model.select_tool CameraParms.new
+    }
+    $draw_tracktool_camera_parms_loaded = true
+end
+
 if( not $draw_tracktool_inventory_loaded)
     $draw_submenu_track.add_item("Inventory") {
         Sketchup.active_model.select_tool Inventory.new
     }
     $draw_tracktool_inventory_loaded = true
+end
+
+if( not $draw_tracktool_dumprisercolumn_loaded)
+    $draw_submenu_track.add_item("Dump Riser Column") {
+        Sketchup.active_model.select_tool DumpRiserColumn.new
+    }
+    $draw_tracktool_dumprisercolumn_loaded = true
 end
 
 if ( not $view_zones_loaded )
@@ -338,5 +396,11 @@ end    # end module Sketchup::TrackTools
 class TrackModelObserver < Sketchup::ModelObserver
     def onPostSaveModel(model)
         puts "TrackModelObserver.onPostSaveModel, title = #{model.title}"
+        puts "TrackModelObserver.onPostSaveModel, path = #{model.path}"
     end
+    def onSaveModel(model)
+        puts "TrackModelObserver.onSaveModel, title = #{model.title}"
+        puts "TrackModelObserver.onSaveModel, path = #{model.path}"
+    end
+
 end

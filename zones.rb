@@ -88,7 +88,6 @@ class Zones
                 @zones[e.guid] = zone
             end
         end
-        puts "Zones.initialize, @zone_count = #{@zone_count}"
         $logfile.puts "Zones.initialize, @zone_count = #{@zone_count}"
         #logfile.flush
     end
@@ -96,7 +95,7 @@ class Zones
     def load_existing_zones       #this is separate from intialize because 
         @zones.each_value do |z|  #      section initializations may reference $zones
             z.load_existing_zone
-            puts z.to_s("load_existing_zone")
+            $logfile.puts z.to_s("load_existing_zone")
         end
         set_outline_visibility
         $logfile.puts "load_existing_zones"
@@ -166,9 +165,22 @@ class Zones
         return nil
     end#
 
-    def create_bases
+    def erase_bases
+        puts "Zones.erase_bases"
+        Sketchup.active_model.attribute_dictionaries.delete("BaseAttributes")
+        Base.init_class_variables
         @zones.each_value do |z|
-            z.erase_base_groups
+            z.erase_base
+        end
+    end
+
+    def create_bases
+        puts "Zones.create_bases"
+        Sketchup.active_model.attribute_dictionaries.delete("BaseAttributes")
+        Base.init_class_variables
+        puts Trk.print_attributes( Sketchup.active_model, 2)
+        @zones.each_value do |z|
+            z.erase_base
             z.add_new_base
         end
         $switches.create_base_for_switches
@@ -283,6 +295,9 @@ class Zones
 
 
 #################################################################Zones.reports
+    def report_slice_data
+        @zones.values.each { |z| z.report_slice_data}
+    end
     def report_file
         puts "Zones.report_file"
         return TrackTools.open_file(".rpt", "w")
@@ -351,27 +366,6 @@ class ExportLayoutData
     end
 end
 
-################################################################### UpdateLayoutData
-
-class UpdateLayoutData
-    def initialize
-        if !TrackTools.tracktools_init("UpdateLayoutData")
-            return
-        end
-
-    end
-
-    def activate
-        $logfile.puts "########################### activate UpdateLayoutData #{Time.now.ctime}"
-        puts          "########################### activate UpdateLayoutData #{Time.now.ctime}"
-        Section.update_layout_data
-    end
-
-    def deactivate(view)
-        $logfile.puts "########################## deactivate UpdateLayoutData #{Time.now.ctime}"
-        puts          "########################## deactivate UpdateLayoutData #{Time.now.ctime}"
-    end
-end
 
 ################################################################# ExportLayoutReport
 
@@ -394,5 +388,86 @@ class ExportLayoutReport
         if !$rptfile.nil?
             $rptfile.flush
         end
+    end
+end
+
+################################################################# ExportLayoutReport
+
+class ReportSliceData
+    def initialize
+        if !TrackTools.tracktools_init("ReportSliceData")
+            return
+        end
+    end
+
+
+    def activate
+        $logfile.puts "######################### activate ReportSliceData #{Time.now.ctime}"
+        puts          "######################### activate ReportSliceData #{Time.now.ctime}"
+        $zones.report_slice_data
+    end
+end
+################################################################# CameraParms
+
+class CameraParms
+    def initialize
+        if !TrackTools.tracktools_init("CameraParms")
+            return
+        end
+    end
+
+
+    def activate
+        puts          "######################### activate CameraParms #{Time.now.ctime}"
+        puts Trk.camera_parms
+    end
+end
+class ApplyXform
+    def initialize
+        if !TrackTools.tracktools_init("ApplyXform")
+            return
+        end
+    end
+
+
+    def activate
+        $logfile.puts "######################### activate ApplyXform #{Time.now.ctime}"
+        puts          "######################### activate ApplyXform #{Time.now.ctime}"
+        entities = []
+        Sketchup.active_model.entities.each do |e|
+            if e.is_a? Sketchup::Group
+                entities = e.explode
+                break
+            end
+        end
+        entities.each do |e|
+            if e.is_a? Sketchup::Face
+                puts "Face"
+                e.vertices.each_with_index { |v,i| puts " #{i} - #{v.position}" }
+            elsif e.is_a? Sketchup::Edge
+                puts "Edge"
+                e.vertices.each_with_index { |v,i| puts " #{i} - #{v.position}" }
+            end
+        end
+        g = Sketchup.active_model.entities.add_group
+        entities.each do |e|
+            if e.is_a? Sketchup::Face
+                g.entities.add_face(e.vertices)
+            elsif e.is_a? Sketchup::Edge
+                g.entities.add_edges(e.vertices)
+            elsif e.is_a? Sketchup::Group
+                g.entities.add_group(e)
+            end
+        end
+        g.entities.each do |e|
+            if e.is_a? Sketchup::Face
+                puts "Face"
+                e.vertices.each_with_index { |v,i| puts " #{i} - #{v.position}" }
+            elsif e.is_a? Sketchup::Edge
+                puts "Edge"
+                e.vertices.each_with_index { |v,i| puts " #{i} - #{v.position}" }
+            end
+        end
+
     end
 end

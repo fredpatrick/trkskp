@@ -102,6 +102,9 @@ class CurvedSection < Section
         @direc          = @section_group.get_attribute(sname, "direction")
         @slope          = @section_group.get_attribute(sname, "slope")
         @segment_count  = @section_group.get_attribute(sname, "segment_count")
+        @radius         = (@parms[@dcode])[0]
+        @arclen_degrees = pb[0]
+
         xform_bed_a     = @section_group.get_attribute(sname, "xform_bed")
         @xform_bed      = Geom::Transformation.new(xform_bed_a)
         xform_alpha_a   = @section_group.get_attribute(sname, "xform_alpha")
@@ -191,6 +194,8 @@ class CurvedSection < Section
         arclen = len_arc * Math::PI / 180.0
         @inline_length =  radius * arclen
         @segment_count =  @n_section_ties
+        @radius         = (@parms[@dcode])[0]
+        @arclen_degrees = pb[0]
         
         delta    = arclen / @segment_count
         dh       = @slope * radius * arclen / @n_section_ties
@@ -228,15 +233,6 @@ class CurvedSection < Section
         @section_group.set_attribute(sname, "slice_ordered_z", @slice_ordered_z)
         @section_group.set_attribute(sname, "entry_tag",       @entry_tag)
 
-        lpts = []
-        np = @@bed_profile.length
-        i = 0
-        while i < np do
-            lpts[i] = @@bed_profile[i].transform @xform_alpha
-            i += 1
-        end
-
-
         body_group = @section_group.entities.add_group
         body_group.name= "track"
         body_group.layer= "track_sections"
@@ -244,7 +240,7 @@ class CurvedSection < Section
         footprnt_group.name= "footprint"
         footprnt_group.layer= "footprint"
 
-        pz = (target_point.position true).z
+        pz = (target_point.position).z
         p0 = Geom::Point3d.new(@@bed_profile[0].x, @@bed_profile[0].y, 0.0)
         p2 = Geom::Point3d.new(@@bed_profile[2].x, @@bed_profile[2].y, 0.0)
         n  = 0
@@ -261,45 +257,57 @@ class CurvedSection < Section
         end
         footprnt_group.entities.add_edges(q0, q2)
 
-        cpts = []
-        rpts = CurvedSection.extend_profile(section_group, 
-                                            body_group,
-                                            @n_section_ties,
-                                            lpts,
-                                            @xform_bed,
-                                            @@bed_mat,
-                                            true,
-                                            cpts)
+        lpts = []
+        rpts = []
+        n    = @@bed_profile.length
+        @@bed_profile.each_with_index { |p,i| lpts[i] = p.transform(@xform_alpha) }
+        face_A = body_group.entities.add_face(lpts)
+        @n_section_ties.times do |j|
+            lpts.each_with_index { |p,i| rpts[i] = p.transform(@xform_bed) }
+            Section.add_faces(body_group.entities, lpts, rpts, @@bed_mat)
+            Section.make_tie(body_group.entities, [lpts[n-1], lpts[n-2], rpts[n-2], rpts[n-1] ])
+            rpts.each_with_index { |p,i| lpts[i] = p}
+        end
+        face_B = body_group.entities.add_face(rpts)
 
      # add section rails
-        nr = 0
-        while nr < 3
-            offset = Geom::Vector3d.new( (nr-1)*0.6875, 
+        3.times do |j|
+            offset = Geom::Vector3d.new( (j-1)*0.6875, 
                                         0, 
                                         @@bed_h + @@tie_h)
-            lpts = []
-            np = @@rail_profile.length
-            i = 0
-            while i < np do
-                lpts[i] = @@rail_profile[i].transform @xform_alpha
-                lpts[i] = lpts[i] + offset
-                i += 1
+            lpts = Array.new
+            rpts = Array.new
+            @@rail_profile.each_with_index {|p,i| lpts[i] = p.transform(@xform_alpha) + offset }
+            @n_section_ties.times do |j|
+                lpts.each_with_index { |p,i| rpts[i] = p.transform(@xform_bed) }
+                Section.add_faces(body_group.entities, lpts, rpts, @@rail_mat)
+                rpts.each_with_index { |p,i| lpts[i] =p}
             end
-            CurvedSection.extend_profile(section_group, 
-                                         body_group,
-                                         @n_section_ties,
-                                         lpts,
-                                         @xform_bed,
-                                         @@rail_mat, 
-                                         false,
-                                         cpts)
-            nr += 1
         end
-        self.connectors = cpts                       
-        section_point = connector(@tag_cnnct)
-        tr_group = make_tr_group(target_point, section_point)
-        @section_group.transformation = tr_group
+
+        face_cnnct = nil
         if @tag_cnnct == "A"
+            face_cnnct = face_A
+        elsif @tag_cnnct == "B"
+            face_cnnct = face_B
+        end
+        source_position, source_normal, source_theta = face_position(face_cnnct)
+        target_position = target_point.position
+        target_normal   = target_point.normal
+        puts "curvedsection, source_position = #{source_position}"
+        puts "curvedsection, source_normal   = #{source_normal}"
+        puts "curvedsection, source_theta    = #{source_theta}"
+        puts "curvedsection, target_position = #{target_position}"
+        puts "curvedsection, target_normal   = #{target_normal}"
+        xform = make_transformation(target_position, target_normal, 
+                                    source_position, source_normal)
+        @section_group.transformation = xform
+
+        cpts = []
+        cpts[0] = Connector.factory(section_group, "A", face_A)
+        cpts[1] = Connector.factory(section_group, "B", face_B)
+        self.connectors = cpts
+        if @tag_cnnct == "A"    
             connector("A").make_connection_link(target_point)
             $current_connection_point = connector("B")
         else
@@ -416,8 +424,10 @@ class CurvedSection < Section
         pb      = phash[@arctyp]
 
         arclen = pb[0] * Math::PI / 180.0
-        pt    = connector("B").position
-        slope = pt.z / pt.y
+        #pt    = connector("B").position
+        #slope = pt.z / pt.y
+        slope = @slope
+        puts "curvedsection.outline_text_group_factory, - slope = #{slope}"
         direc  = @direc
         p0    = Geom::Point3d.new(0.0, 0.0, 0.0)
         ux    = Geom::Vector3d.new(1.0, 0.0, 0.0)
@@ -675,6 +685,26 @@ class CurvedSection < Section
     end
     def slice_ordered_z
         return @slice_ordered_z
+    end
+
+    def slope
+        return @slope
+    end
+
+    def radius
+        return @radius
+    end
+
+    def arclen_degrees
+        return @arclen_degrees
+    end
+
+    def diameter_code
+        return @diameter_code
+    end
+
+    def direction
+        return @direc
     end
 
     def update_ordered_attributes(section_index_z, slice_ordered_z, entry_tag)

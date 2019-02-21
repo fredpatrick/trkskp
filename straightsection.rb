@@ -171,14 +171,6 @@ class StraightSection < Section
         @section_group.set_attribute(sname, "slice_ordered_z", @slice_ordered_z)
         @section_group.set_attribute(sname, "entry_tag",       @entry_tag)
 
-        lpts = []
-        np = @@bed_profile.length
-        i = 0
-        while i < np do
-           lpts[i] = @@bed_profile[i].transform @xform_alpha
-            i += 1
-        end
-
     # Build section bed and ties
 
         body_group = @section_group.entities.add_group
@@ -188,7 +180,7 @@ class StraightSection < Section
         footprnt_group.name= "footprint"
         footprnt_group.layer= "footprint"
 
-        pz = (target_point.position true).z
+        pz = target_point.position.z
         p0 = Geom::Point3d.new(@@bed_profile[0].x, @@bed_profile[0].y, 0.0)
         p2 = Geom::Point3d.new(@@bed_profile[2].x, @@bed_profile[2].y, 0.0)
         t1 = Geom::Transformation.translation([0.0, lngth, dh])
@@ -197,41 +189,66 @@ class StraightSection < Section
         footprnt_group.entities.add_edges(p0, q0)
         footprnt_group.entities.add_edges(p2, q2)
         footprnt_group.entities.add_edges(q0, q2)
-        cpts = []       # cpts will be updated in  extend_profile 
-        StraightSection.extend_profile(@section_group, body_group,
-                                       n_section_ties,
-                                       lpts,
-                                       @xform_bed,
-                                       @@bed_mat,
-                                       true, 
-                                       cpts)
+
+        lpts = []
+        rpts = []
+        @@bed_profile.each_with_index { |p,i| lpts[i] = p.transform(@xform_alpha) }
+        face_A = body_group.entities.add_face(lpts)
+        lpts.each_with_index { |p,i| rpts[i] = p.transform(@xform_bed) }
+        Section.add_straight_faces(body_group.entities, lpts, rpts, @@bed_mat)
+        face_B = body_group.entities.add_face(rpts)
+
+        vs = rpts[3] - lpts[3]
+        dt = (vs.length) / n_section_ties
+        v1 = vs
+        v1.length = dt
+        np = lpts.length
+        bpts = []
+        bpts[0] = lpts[np-1]
+        bpts[1] = lpts[np-2]
+        n_section_ties.times do |j|
+            bpts[2] = bpts[1] + v1
+            bpts[3] = bpts[0] + v1
+            Section.make_tie( body_group.entities, bpts)
+            bpts[1] = bpts[2]
+            bpts[0] = bpts[3]
+        end
+
      # add section rails
         rh = @@bed_h + @@tie_h
-        nr = 0
-        while nr < 3
-            offset = Geom::Vector3d.new( (nr-1)*0.6875, 0, rh)
-            lpts = []
+        3.times do |j|
+            offset = Geom::Vector3d.new( (j-1)*0.6875, 0, rh)
+            lpts = Array.new
+            rpts = Array.new
             np = @@rail_profile.length
-            i = 0
-            while i < np do
-                lpts[i] = @@rail_profile[i].transform @xform_alpha
-                lpts[i] = lpts[i] + offset
-                i += 1
-            end
-            StraightSection.extend_profile(@section_group, body_group,
-                                           n_section_ties,
-                                           lpts,
-                                           @xform_bed,
-                                           @@rail_mat, 
-                                           false,
-                                           cpts)
-            nr += 1
+            @@rail_profile.each_with_index { |p,i| lpts[i] = p.transform(@xform_alpha)+offset }
+            lpts.each_with_index { |p,i| rpts[i] = p.transform(@xform_bed) }
+            Section.add_straight_faces(body_group.entities, lpts, rpts, @@rail_mat)
         end
-        self.connectors= cpts
-        section_point = connector(@tag_cnnct)
-        tr_group = make_tr_group(target_point, section_point)
-        @section_group.transformation = tr_group
+
+        face_cnnct = nil
         if @tag_cnnct == "A"
+            face_cnnct = face_A
+        elsif @tag_cnnct == "B"
+            face_cnnct = face_B
+        end
+        source_position, source_normal, source_theta = face_position(face_cnnct)
+        target_position = target_point.position
+        target_normal   = target_point.normal
+        puts "straightsection, source_position = #{source_position}"
+        puts "straightsection, source_normal   = #{source_normal}"
+        puts "straightsection, source_theta    = #{source_theta}"
+        puts "straightsection, target_position = #{target_position}"
+        puts "straightsection, target_normal   = #{target_normal}"
+        xform = make_transformation(target_position, target_normal, 
+                                    source_position, source_normal)
+        @section_group.transformation = xform
+        
+        cpts = []
+        cpts[0] = Connector.factory(section_group, "A", face_A)
+        cpts[1] = Connector.factory(section_group, "B", face_B)
+        self.connectors = cpts
+        if @tag_cnnct == "A"    
             connector("A").make_connection_link(target_point)
             $current_connection_point = connector("B")
         else
@@ -511,6 +528,9 @@ class StraightSection < Section
     end
     def slice_ordered_z
         return @slice_ordered_z
+    end
+    def segment_count
+        return @segment_count
     end
 
     def update_ordered_attributes(section_index_z, slice_ordered_z, entry_tag)

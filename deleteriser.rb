@@ -42,24 +42,16 @@
  # 
  #
 
+
 require 'sketchup.rb'
-require 'langhandler.rb'
-require "#{$trkdir}/section.rb"
-require "#{$trkdir}/zone.rb"
-require "#{$trkdir}/switches.rb"
+require "#{$trkdir}/risers.rb"
+require "#{$trkdir}/trk.rb"
 
-$exStrings = LanguageHandler.new("track.strings")
-
-include Math
-
-class ScanLayout
-
+class DeleteRiser
     def initialize
-        TrackTools.tracktools_init("ScanLayout")
-        $logfile.flush
+        puts "DeleteRiserConnector.initialize"
+        TrackTools.tracktools_init("DeleteRiser")
 
-        $current_connection_point = nil
-        @dtxt = ""
         cursor_path = Sketchup.find_support_file("riser_cursor_0.png",
                                                  "Plugins/xc_tracktools/")
         if cursor_path
@@ -76,79 +68,82 @@ class ScanLayout
             UI.messagebox("Couldnt get cursor_path")
             return
         end 
-        @ip_xform = $zones.zones_group.transformation.clone
-        @ip_xform.invert!
-
-        @cursor_id = @cursor_looking
-        @istate = 0 
     end
 
     def onSetCursor
         if @cursor_id
-            
             UI.set_cursor(@cursor_id)
         end
     end
 
     def activate
-        $logfile.puts "############################# activate ScanLayout #{Time.now.ctime}"
-        puts          "############################# activate ScanLayout #{Time.now.ctime}"
+        $logfile.puts "########################### activate DeleteRiser #{Time.now.ctime}"
+        puts          "########################### activate DeleteRiser #{Time.now.ctime}"
         @ip = Sketchup::InputPoint.new
-        @on_target = false
+        @menu_flg = false
+        @cursor_id      = @cursor_looking
+        @state          = "looking"
+        @on_target      = false
+        @riser_group = nil
     end
 
     def deactivate(view)
-        $logfile.puts "############################ deactivate ScanLayout #{Time.now.ctime}"
-        puts          "############################ deactivate ScanLayout #{Time.now.ctime}"
-        TrackTools.model_summary
+        $logfile.puts "######################## deactivate DeleteRiser #{Time.now.ctime}"
+        puts          "######################## deactivate DeleteRiser #{Time.now.ctime}"
         $logfile.flush
-        view.invalidate if @drawn
     end
-
-    def onLButtonDown( flags, x, y, view)
-        if !@on_target then return end
-        puts "onLButtonDown"
-
-        @ip.pick view, x, y
-        @ph = view.pick_helper
-        npick = @ph.do_pick(x, y)
-        puts "onLButtonDown, npick = #{npick}"
-
-        if npick > 0 
-            i = 0
-            while i < npick
-                path = @ph.path_at(i)
-                puts "path size = #{path.size}"
-                path.each_with_index do |e,i|
-                    if ( e.is_a? Sketchup::Group )
-                        puts "Section.section_path? #{i}, e.name = #{e.name}, #{e.guid}"
-                      # if ( e.name == "section" )
-                      #     section = @@track_sections[e.guid]
-                      #     return section
-                      # end
-                    end
-                end
-                i += 1
-            end
-        end
-    end
-
 
     def onMouseMove( flags, x, y, view)
-        @ip.pick view, x, y
-        @ph = view.pick_helper
-        npick = @ph.do_pick(x, y)
-
-        if npick > 0 
-            path = @ph.path_at(0)
-            section = Section.section_path?(path)
-            if  section.nil?
-                @on_target = false
-                @cursor_id = @cursor_looking
+        pick_helper = nil
+        npick       = 0
+        if @state == "looking"
+            @ip.pick view, x, y
+            pick_helper   = view.pick_helper
+            npick         = pick_helper.do_pick(x, y, 1.0)
+        end
+        if npick > 0
+            @riser_group = identify_target(pick_helper)
+            @cursor_id = @cursor_on_target
+            @on_target = true
+            if @riser_group
+                @state          = "riser_picked"
             else
-                @on_target = true
-                @cursor_id = @cursor_on_target
+                @on_target = false
+                @state = "looking"
+                @cursor_id = @cursor_looking
+            end
+        else
+            @on_target = false
+            @state = "looking"
+            @cursor_id = @cursor_looking
+        end
+    end
+
+    def onLButtonDown(flags, x, y, view)
+        return if !@on_target
+        puts "DeleteRiser, onLButtonDown"
+        if @state == "riser_picked"
+            $risers.delete_riser(@riser_group)
+            @state = "looking"
+            @on_target = false
+            @cursor_id = @cursor_looking
+            @riser_group = nil
+        end
+    end
+
+    def identify_target(pick_helper)
+        riser_group     = nil
+        pick_helper.count.times do |n|
+            path = pick_helper.path_at(n)
+            path.each do  |e|
+                if e.is_a? Sketchup::Group
+                    if e.name == "riser" 
+                        riser_group = e                          # base_group is always defined 
+                        return riser_group
+                    end
+                end
             end
         end
-    end # end onMouseMove
-end #end of Class ScanLayout
+        return nil
+    end
+end        #end of class DeleteRiser

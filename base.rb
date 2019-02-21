@@ -47,6 +47,7 @@ require 'langhandler.rb'
 require "#{$trkdir}/section.rb"
 require "#{$trkdir}/zone.rb"
 require "#{$trkdir}/risertab.rb"
+require "#{$trkdir}/skins.rb"
 require "#{$trkdir}/slices.rb"
 require "#{$trkdir}/trk.rb"
 
@@ -66,7 +67,8 @@ class Base
             @@base_thickness = model.get_attribute("BaseAttributes", "base_thickness")
             @@base_material  = model.get_attribute("BaseAttributes", "base_material")
             @@base_profile   = model.get_attribute("BaseAttributes", "base_profile")
-            @@risertab_count = model.get_attribute("BaseAttributes", "risertab_count")
+            @@riserconnector_count = model.get_attribute("BaseAttributes", 
+                                                         "riserconnector_count")
         else
             puts "Base.init_class_variables, didnt find attribute dictionary"
             mattrs           = model.attribute_dictionary( "BaseAttributes", true)
@@ -80,11 +82,10 @@ class Base
                                  Geom::Point3d.new( @@base_width * 0.5, 0.0, 0.0),
                                  Geom::Point3d.new( @@base_width * 0.5, 0.0, -@@base_thickness),
                                  Geom::Point3d.new(-@@base_width * 0.5, 0.0, -@@base_thickness)])
-            @@risertab_count = model.set_attribute("BaseAttributes", "risertab_count", 0)
         end
-        @@risertabs = Hash.new
         layers = model.layers
         layers.add "base"
+        @@bases = Hash.new
     end
     def Base.base_width
         return @@base_width
@@ -98,350 +99,134 @@ class Base
     def Base.base_material
         return @@base_material
     end
-    def Base.risertab_count
-        return @@risertab_count
-    end
-    def Base.increment_risertab_count
-        @@risertab_count += 1
-        Sketchup.active_model.set_attribute("BaseAttributes","risertab_count", @@risertab_count)
-        return @@risertab_count
-    end
     def Base.risertab_path?(ph)
-        #puts "Base.risertab_path?, searching for risertab"
-        ans = search_paths(ph, "risertab")
+        ans = search_paths_for_face(ph, "risertab")
         if ans
-            #puts "Base.risertab_path?, found risertab"
             risertab_group = ans[0]
             risertab       = @@risertabs[risertab_group.guid]
+            #puts "Base.risertab_path?, found risertab, " +
+            #                       "risertab_index = #{risertab.risertab_index}"
             return risertab
         end
         return nil
     end
-    def Base.risertab(guid)
-        return @@risertabs[guid]
+
+    def Base.base(base_guid)
+        return @@bases[base_guid]
     end
 
-    def initialize(base_group, parent=nil, switchsection=nil)
+    def Base.factory(base_group, parent=nil, switchsection=nil)
+        base = Base.new(base_group, parent,switchsection)
+        @@bases[base.guid] = base
+        return base
+    end
+
+    def Base.erase_base(base)
+        puts "Base.erase_base"
+        @@bases.delete base.guid
+        base.erase_base
+    end
+
+    def initialize(base_group, parent = nil, switchsection = nil)
         @base_group         = base_group
-        if parent
+        @base_group.layer   = "base"
+        @risers             = Hash.new
+        @spiral             = nil
+        if !parent.nil?
             @slices_group       = @base_group.entities.add_group
             @slices_group.name  = "slices"
             @skins_group        = @base_group.entities.add_group
             @skins_group.name   = "skins"
+            @slices             = Slices.new(@slices_group)
+            @skins              = Skins.new(@skins_group)
 
             if parent.is_a? Zone
                 @zone       = parent
+                @base_group.set_attribute("BaseAttributes", "zone_guid", @zone.guid)
+
                 slice_index = 0
+                section_guids = []
                 last        = false
                 @zone.traverse_zone { |s, last|
-                    slice_index = make_build_geometry(@slices_group, @@base_profile, 
-                                                      slice_index, s, last)
+                   section_guids << [slice_index, s.guid]
+                    slice_index = @slices.make_slice_faces(@@base_profile, slice_index, s, last)
+                    if last then section_guids << [slice_index - 1, s.guid] end
                     puts "base.initialize, slice_index = #{slice_index}"
                 }
+                @slices_group.set_attribute("SlicesAttributes", "section_guids", section_guids)
                 puts count_faces(@slices_group.entities,1)
-                @slices = Slices.new(@slices_group)
-                @slices.load_existing_slices
-                @slices.distance
-                @slices.print_faces
-
-                @slices_group.entities.each { |e|
-                    if e.is_a? Sketchup::Face
-                        ix = e.get_attribute("SliceAttributes", "slice_index")
-                        vtxs = e.vertices
-                        puts " slice_index = #{ix} - #{vtxs[0].position} " + 
-                                              " #{vtxs[1].position} #{vtxs[2].position}"
-                    end
-                }
-                puts "base.initialize, geometry made, slices in slices_group"
-                make_skins(@slices_group, @skins_group, @@base_material)
+                @skins.make_skins_faces(@slices_group, @@base_material)
+                puts "Base.initialize, calling test_for_spiral"
+                test_for_spiral
             else
-                make_switch_geometry(@slices_group, switchsection.section_group)
-                make_skins(@slices_group, @skins_group, @@base_material)
+                @slices.make_switch_geometry(switchsection.section_group)
+                @skins.make_skins_faces(@slices_group, @@base_material)
             end
-        else
-            load_existing_base
         end
     end
     def load_existing_base
         puts "base.load_existing_base"
-        @base_group.entities.each { |e|
+        zone_guid = @base_group.get_attribute("BaseAttributes", "zone_guid")
+        @zone     = $zones.zone(zone_guid)
+        @base_group.entities.each do |e|
             if e.is_a? Sketchup::Group
                 if e.name == "slices"
-                    puts "base.load_existing_base, found slices_group, guid = #{e.guid}"
                     @slices_group = e
                     @slices       = Slices.new(@slices_group)
                     @slices.load_existing_slices
                     @slices.distance
+                   # @slices.test_continuous_slope
                 elsif e.name == "skins"
                     @skins_group  = e
-                elsif e.name == "risertab"
-                    risertab = RiserTab.new("load", e)
-                    @@risertabs[risertab.guid] = risertab
+                    @skins        = Skins.new(@skins_group)
+                    @skins.load_existing_skins
+                elsif e.name == "spiral"
+                    @spiral       = Spiral.new(e, @base_group)
+                    puts "base.load_existing_base, found a spiral"
                 end
             end
-        }
-        #print_skins(@skins_group)
+        end
+        if !@spiral.nil?
+            puts @spiral.to_s
+        end
+    end
+
+    def erase_base
+        puts "base.erase_base"
+        @base_group.erase!
+        @risers.each_pair do |key,value|    # Note: This only erases those risers
+            puts "base.erase_base, key = #{key}"
+            riser = value                   #       associated with this base
+            riser.erase
+        end
+        @risers.clear
+    end
+
+    def register_riser(riser)
+        @risers[riser.guid] = riser
+    end
+
+    def unregister_riser(riser)
+        @risers.delete riser.guid
+    end
+
+    def section_count
+        return @slices.section_count
     end
     def guid
         return @base_group.guid
     end
-    def make_build_geometry( slices_group, profile, slice_index, section_group, last)
-
-        section         = Section.section(section_group.guid)
-        sname           = "SectionAttributes"
-        xform_bed_a     = section_group.get_attribute("SectionAttributes", "xform_bed")
-        xform_bed       = Geom::Transformation.new(xform_bed_a)
-        xform_alpha_a   = section_group.get_attribute("SectionAttributes", "xform_alpha")
-        xform_alpha     = Geom::Transformation.new(xform_alpha_a)
-        xform_group     = section_group.transformation
-        segment_count   = section_group.get_attribute("SectionAttributes", "segment_count")
-        slice_ordered_z = section.slice_ordered_z
-
-        section_guid    = section_group.guid
-        section_index_g = section.section_index_g
-        section_index_z = section.section_index_z
-        puts "base.make_build_geometry ################# Begin section ixg = " +
-               " #{section_index_g} ################" 
-        puts "    section_index_g = #{section_index_g}"
-        puts "    section_index_z = #{section_index_z}"
-        puts "    last            = #{last}"
-        puts "    slice_ordered_z = #{slice_ordered_z}"
-        puts "    segment_count   = #{segment_count}"
-        puts "    slice_index     = #{slice_index}"
-        puts "    xform_group     = }"
-        puts Section.dump_transformation(xform_group, 1)
-
-        slices = []
-        lpts = []
-        rpts = []
-        profile.each_with_index{ |p,i| lpts[i] = p.transform xform_alpha}
-        
-        ns = segment_count + 1
-        ns.times { |j|
-            slices[j] = Array.new(lpts)
-            slices[j].each_with_index { |p,i| slices[j][i] = p.transform xform_group }
-            puts "slice[j], j = #{j} - #{slices[j][0]} #{slices[j][1]} #{slices[j][2]} "
-            if j == ns -1
-                break
-            end
-
-            lpts.each_with_index { |p,i| rpts[i] = p.transform xform_bed}
-            rpts.each_with_index { |p,i| lpts[i] = p }
-        }
-        nt = slices.length - 1
-        if last 
-            nt = slices.length
-        end
-        nt.times { |n|
-            m = n
-            if slice_ordered_z == "reversed"
-                m = slices.length - n - 1
-            end
-            f = slices_group.entities.add_face(slices[m])
-            f.set_attribute("SliceAttributes", "slice_index",  slice_index)
-            f.set_attribute("SliceAttributes", "section_guid", section_guid)
-            puts "add_face, slice_index = #{slice_index}, m = #{m}"
-            slice_index += 1
-        }
-        slices_group.set_attribute("SlicesAttributes", "slice_count", slice_index)
-        return slice_index
-    end
-    def make_switch_geometry(slices_group, switchsection_group)
-
-        sname            = "SectionAttributes"
-        slope            = switchsection_group.get_attribute(sname, "slope")
-        radius           = switchsection_group.get_attribute(sname, "radius")
-        delta            = switchsection_group.get_attribute(sname, "delta")
-        arc_degrees      = switchsection_group.get_attribute(sname, "arc_degrees")
-        arc_origin       = switchsection_group.get_attribute(sname, "origin")
-        arc_count        = switchsection_group.get_attribute(sname, "arc_count")
-        ab_length        = switchsection_group.get_attribute(sname, "ab_length")
-        a                = switchsection_group.get_attribute(sname, "a")
-        direction        = switchsection_group.get_attribute(sname, "direction")
-        xform_bed_arc_a  = switchsection_group.get_attribute(sname, "xform_bed_arc")
-        xform_bed_arc    = Geom::Transformation.new(xform_bed_arc_a)
-        xform_alpha_a    = switchsection_group.get_attribute("SectionAttributes", "xform_alpha")
-        xform_alpha      = Geom::Transformation.new(xform_alpha_a)
-        xform_group      = switchsection_group.transformation
-        base_width       = Base.base_width
-        base_thickness   = Base.base_thickness
-        base_profile     = Base.base_profile
-
-        l      = ab_length - a
-        r      = radius
-        rp2    = r +  0.5 * base_width
-        rm2    = r -  0.5 * base_width
-        theta1 = atan( l / rp2 )
-        theta2 = asin( l / rp2 )
-        theta3 = arc_degrees * Math::PI / 180.0
-
-        puts "base.make_switch_geometry, slope = #{slope}, radius = #{radius}, delta = #{delta}"
-        puts "base.make_switch_geometry, arc_degrees = #{arc_degrees}, arc_count = #{arc_count}"
-        puts "base.make_switch_geometry, arc_origin = #{arc_origin}, ab_length = #{ab_length}"
-        puts "base.make_switch_geometry, a = #{a}, direction = #{direction}"
-        puts "base.make_switch_geometry, theta1 = #{theta1}, theta2" +
-                                                " = #{theta2}, theta3 = #{theta3}"
-        puts Section.dump_transformation(xform_group, 1)
-        $logfile.puts "base.make_switch_geometry, slope = #{slope}, radius = #{radius}, delta = #{delta}"
-        $logfile.puts "base.make_switch_geometry, arc_degrees = #{arc_degrees}, arc_count = #{arc_count}"
-        $logfile.puts "base.make_switch_geometry, arc_origin = #{arc_origin}, ab_length = #{ab_length}"
-        $logfile.puts "base.make_switch_geometry, a = #{a}, direction = #{direction}"
-        $logfile.puts "base.make_switch_geometry, theta1 = #{theta1}, theta2" +
-                                                " = #{theta2}, theta3 = #{theta3}"
-        $logfile.puts Section.dump_transformation(xform_group, 1)
-
-        lpts        = []
-        pts         = []
-        slice_index = 0
-        base_profile.each_with_index{ |p,i| lpts[i] = p}
-        lpts.each_with_index{ |p,i| pts[i] = p.transform xform_group}
-        f = slices_group.entities.add_face(pts)
-        f.set_attribute("SliceAttributes", "slice_index", slice_index)
-        puts "make_switch_geometry, " + Section.face_to_a(f)
-        slice_index += 1
-
-        if  a != 0 
-            va = Geom::Vector3d.new(0.0, a, 0.0)
-            lpts.each_with_index { |p,i| pts[i] = p + va}
-            f = slices_group.entities.add_face(pts)
-            f.set_attribute("SliceAttributes", "slice_index", slice_index)
-            slice_index += 1
-        end
-        
-        #set ranges of theta so that slices always hit corners of base
-        if direction == "Right"
-            delta = -delta
-        end
-        is0    =slice_index
-        n1     = ((theta1)/delta).floor
-        is1    = is0 + n1
-        delta1 = theta1 / n1
-        n2     = ((theta2 - theta1)/delta).floor
-        is2    = is1 + n2
-        delta2 = (theta2 - theta1) / n2
-        n3     = ((theta3 - theta2)/delta).floor
-        is3    = is2 + n3
-        delta3 = (theta3 - theta2)/ n3
-        puts "make_switch_geometry, n1 = #{n1}, delta1 = #{delta1}"
-        puts "make_switch_geometry, n2 = #{n2}, delta2 = #{delta2}"
-        puts "make_switch_geometry, n3 = #{n3}, delta3 = #{delta3}"
-        $logfile.puts "make_switch_geometry, n1 = #{n1}, delta1 = #{delta1}"
-        $logfile.puts "make_switch_geometry, n2 = #{n2}, delta2 = #{delta2}"
-        $logfile.puts "make_switch_geometry, n3 = #{n3}, delta3 = #{delta3}"
-
-        theta  = 0.0
-        ns     = 0
-        thetab = 0.0
-        deltab = 100.0
-        while slice_index >= is0 && slice_index < is3
-            if slice_index < is1 
-                puts "base.make_switch_geometry, in range1"
-                ns     = n1
-                deltab = delta1
-                thetab = 0.0
-            elsif slice_index >= is1 && slice_index < is2
-                puts "base.make_switch_geometry, in range2"
-                ns     = n2
-                thetab = theta1
-                deltab = delta2
-            elsif slice_index >= is2 && slice_index <= is3
-                puts "base.make_switch_geometry, in range3"
-                ns     = n3
-                deltab = delta3
-                thetab = theta2
-            end
-            ns.times { |n|
-                puts "base.make_switch_geometry, n = #{n}, ns = #{ns}, thetab = #{thetab}, " +
-                                      "deltab = #{deltab}"
-                theta = thetab + (n + 1) * deltab
-                
-                $logfile.puts "base.make_switch_geometry, slice_index = #{slice_index}, "+
-                                  "theta = #{theta}"
-                $logfile.flush
-                puts "base.make_switch_geometry, theta = #{theta}"
-                puts "base.make_switch_geometry, slice_index = #{slice_index}, "+
-                                  "theta = #{theta}"
-                if direction == "Right"
-                    puts "base.make_switch_geometry, making Right switch base"
-                    lpts[2] = Geom::Point3d.new(r - rm2*cos(theta), a + rm2*sin(theta), 0.0)
-                    lpts[1] = Geom::Point3d.new(r - r*cos(theta), a + r*sin(theta), 0.0)
-                    if theta <= theta1
-                        lpts[0] = Geom::Point3d.new( -0.5 * base_width, a + rp2*tan(theta), 0.0)
-                    elsif theta > theta1 && theta <= theta2
-                        lpts[0] = Geom::Point3d.new(r - l / tan(theta), a + l, 0.0)
-                    elsif theta > theta2 && theta <= theta3
-                        lpts[0] = Geom::Point3d.new(r - rp2*cos(theta), a + rp2*sin(theta), 0.0)
-                    end
-                else
-                    lpts[0] = Geom::Point3d.new(-r + rm2*cos(theta), a + rm2*sin(theta), 0.0)
-                    lpts[1] = Geom::Point3d.new(-r + r*cos(theta), a + r*sin(theta), 0.0)
-                    if theta <= theta1
-                        lpts[2] = Geom::Point3d.new(  0.5 * base_width, a + rp2*tan(theta), 0.0)
-                    elsif theta > theta1 && theta <= theta2
-                        lpts[2] = Geom::Point3d.new(-r + l / tan(theta), a + l, 0.0)
-                    elsif theta > theta2 && theta <= theta3
-                        lpts[2] = Geom::Point3d.new(-r + rp2*cos(theta), a + rp2*sin(theta), 0.0)
-                    end
-                end
-                lpts[3] = lpts[2] + Geom::Vector3d.new(0.0, 0.0, -base_thickness)
-                lpts[4] = lpts[0] + Geom::Vector3d.new(0.0, 0.0, -base_thickness)
-                puts "pts, n = #{n} - #{lpts[0]} #{lpts[1]} #{lpts[2]}  #{lpts[3]} #{lpts[4]} "
-                lpts.each_with_index { |p,i| pts[i] = p.transform xform_group}
-                puts "pts, n = #{n} - #{pts[0]} #{pts[1]} #{pts[2]}  #{pts[3]} #{pts[4]} "
-                f = slices_group.entities.add_face(pts)
-                f.set_attribute("SliceAttributes", "slice_index", slice_index)
-                slice_index += 1
-            }
-        end
-        slices_group.set_attribute("SlicesAttributes", "slice_count", slice_index)
+    def slices
+        return @slices
     end
 
-    def make_skins( slices_group, skins_group, face_mat)
-        slice_list = []
-        slices_group.entities.each { |e|
-            if ( e.is_a? Sketchup::Face )
-                slice_index = e.get_attribute("SliceAttributes", "slice_index")
-                puts "zone.make_skins, slice_index = #{slice_index}"
-                puts Section.face_to_a(e)
-                slice_list[slice_index] = e
-                puts "zone.make_skins, slice_list.length = #{slice_list.length}"
-            end
-        }
-        ns = slice_list.length
-        puts "zone.make_skins, ns = #{ns}"
-        n  = 0
-        lpts = []
-        rpts = []
-        while n < ns - 1
-            puts "zone.make_skins, n = #{n}"
-            slice = slice_list[n]
-            slice.vertices.each_with_index { |v,i| lpts[i] = v.position}
-            slice = slice_list[n + 1]
-            slice.vertices.each_with_index { |v,i| rpts[i] = v.position}
-        
-            nr   = lpts.length
-            i = 0
-            while i < nr
-                skins_group.entities.add_edges( lpts[i], rpts[i])
-                edges = skins_group.entities.add_edges(rpts[i - 1], rpts[i])
-                edges[0].hidden = true
-                puts "zone.make_skins, n = #{n}, i = #{i}, lpts[i-1] = #{lpts[i-1]}," +
-                           " lpts[i] = #{lpts[i]}, rpts[i] = #{rpts[i]}"
-                face_1 = skins_group.entities.add_face(lpts[i-1], lpts[i], rpts[i])
-                face_1.material = face_mat
-                face_1.back_material = face_mat
-                face_2 = skins_group.entities.add_face(lpts[i-1], rpts[i], rpts[i-1])
-                face_2.material = face_mat
-                face_2.back_material = face_mat
-                face_1.set_attribute("FaceAttributes", "face_code", n*100 + i*2)
-                face_2.set_attribute("FaceAttributes", "face_code", n*100 + i*2 +1)
-                edges = skins_group.entities.add_edges(lpts[i-1], rpts[i])
-                edges[0].hidden = true
-                i  += 1
-            end
-            n += 1
-        end
-    end 
+    def skins
+        return @skins
+    end
+
+    def spiral
+        return @spiral
+    end
 
     def print_skins(skins_group)
         skins_group.entities.each { |f|
@@ -476,34 +261,233 @@ class Base
         puts count_faces(slices_group.entities,1)
         return 
     end
-
-    def create_risertab(pick_location, face_code)
-        edge_location = @slices.edge_location(pick_location, face_code)
-        puts edge_location_to_s(edge_location, 1)
-        slice_index         = edge_location[0]
-        edge_point          = edge_location[1]
-        edge_normal         = edge_location[2]
-        s_point             = edge_location[3]
-        slope               = @slices.slope(slice_index)
-        risertab_group      = @base_group.entities.add_group
-        risertab_group.name = "risertab"
-        risertab            = RiserTab.new("build", risertab_group, 
-                                           slope,   edge_point,    edge_normal)
-        @@risertabs[risertab.guid] = risertab
-        puts "base.create_risertab, risertab = #{risertab}"
-        return risertab
+    
+    def analysis
+        @zone.traverse_zone { |sg,last|
+            section = Section.section(sg.guid)
+            section_index_z = section.section_index_z
+            entry_tag       = section.entry_tag
+            connector       = section.connector(entry_tag)
+            p0              = connector.position
+            normal          = connector.normal
+            puts "base.analysis, section_index_z = #{section_index_z}, p0 = #{p0}, " +
+                                     "normal = #{normal}"
+            next if section.section_type != "curved"
+            radius          = section.radius
+            arclen          = section.arclen_degrees
+            direction       = section.direction
+            puts "base.analysis, radius = #{radius}, arclen = #{arclen}, " +
+                                  "direction = #{direction}"
+            slope           = section.slope
+            inline          = Geom::Vector3d.new(-normal.x, -normal.y, 0.0).normalize
+            uz              = Geom::Vector3d.new(0.0, 0.0, 1.0)
+            u0              = uz.cross(inline)
+            pa              = Geom::Point3d.new(p0.x + radius*u0.x, p0.y + radius*u0.y, 0.0)
+            puts "base.analysis, slope           = #{slope}"
+            puts "base.analysis, entry_tag       = #{entry_tag}"
+            puts "base.analysis, arc origin      = #{pa}"
+        }
+        puts "base.analysis, calling test_for_spiral"
+        test_for_spiral
     end
 
-    def edge_location_to_s(edge_location, level)
-        str =  "######################## EdgeLocation ########################\n"
-        str += Trk.tabs(level) + "slice_index = #{edge_location[0]}\n"
-        str += Trk.tabs(level) + "edge_point  = #{edge_location[1]}\n"
-        str += Trk.tabs(level) + "edge_normal = #{edge_location[2]}\n"
-        s= edge_location[3]
-        str += Trk.tabs(level) + "s_point     = (#{s.x.to_l}, #{s.y.to_l}, #{s.z.to_l})\n"
-        str += Trk.tabs(level) + "ss distance = #{edge_location[4].to_l}\n"
-        str += "#############################################################\n"
+    def test_for_spiral
+        @state = "looking_for_spiral_start"
+        @spiral     = nil
+        @zone.traverse_zone { |sg,last|
+            section = Section.section(sg.guid)
+            if @state == "looking_for_spiral_start"
+                if section.section_type == "curved"
+                    @spiral       = Spiral.new(section, @base_group)
+                    @state        = "looking_for_spiral_end"
+                end
+            elsif @state == "looking_for_spiral_end"
+                if !@spiral.update_parms(section)
+                    if @spiral.total_arclen > 360.0
+                        @spiral.create_spiral
+                    end
+                    @spiral = nil
+                    @state        = "looking_for_spiral_start"
+                end
+            end
+            if last && !@spiral.nil?
+                if @spiral.total_arclen > 360.0
+                    @spiral.create_spiral
+                end
+            end
+        }
+    end
+
+    def section_in_spiral?(section)
+        if @spiral.nil?
+            puts "base.section_in_spiral?, @spiral is nil"
+            return false
+        end
+        return @spiral.section_in_spiral?(section)
+    end
+
+    class Spiral
+        def initialize(arg, base_group)
+            @tolerance = 0.05
+            if arg.is_a? Sketchup::Group
+                if arg.name == "spiral"
+                    @spiral_group = arg
+                    @start_index  = arg.get_attribute("SpiralAttributes", "start_index")
+                    @end_index    = arg.get_attribute("SpiralAttributes", "end_index")
+                    @radius       = arg.get_attribute("SpiralAttributes", "radius")
+                    @origin       = arg.get_attribute("SpiralAttributes", "origin")
+                    @total_arclen = arg.get_attribute("SpiralAttributes", "total_arclen")
+                end
+                return
+            elsif arg.is_a? CurvedSection
+                section = arg
+                @start_index  = section.section_index_z
+                @end_index    = @start_index + 1
+                @radius       = section.radius
+                @origin       = calculate_spiral_origin(section)
+                @total_arclen = section.arclen_degrees
+                @base_group   = base_group
+            end
+        end
+
+        def update_parms(section)
+            return false if section.section_type != "curved"
+            this_origin = calculate_spiral_origin(section)
+            delta       = (this_origin - @origin).length.to_f
+            if delta > @tolerance
+                return false
+            end
+            @end_index    = section.section_index_z + 1
+            @total_arclen = @total_arclen + section.arclen_degrees
+            return true
+        end
+
+        def create_spiral
+            puts "Spiral.create_spiral, Tentative Spiral"
+            puts "Spiral.create_spiral, start_index  = #{@start_index}"
+            puts "Spiral.create_spiral, end_index    = #{@end_index}"
+            puts "Spiral.create_spiral, radius       = #{@radius}"
+            puts "Spiral.create_spiral, origin       = #{@origin}"
+            puts "Spiral.create_spiral, total_arclen = #{@total_arclen}"
+            ret = UI.messagebox("Do you want to create spiral?", MB_YESNO)
+            return if ret == IDNO
+
+            @spiral_group      = @base_group.entities.add_group
+            @spiral_group.name = "spiral"
+            puts "spiral.create_spiral, guid = #{@spiral_group.guid}"
+            p1 = Geom::Point3d.new(@origin.x - 1.0, @origin.y, 0.0)
+            p2 = Geom::Point3d.new(@origin.x + 1.0, @origin.y, 0.0)
+            p3 = Geom::Point3d.new(@origin.x, @origin.y - 1.0, 0.0)
+            p4 = Geom::Point3d.new(@origin.x, @origin.y + 1.0, 0.0)
+            edgeh = @spiral_group.entities.add_line(p1, p2)
+            edgev = @spiral_group.entities.add_line(p3, p4)
+            structure_h = Trk.find_structure_top(Geom::Point3d.new(@origin.x, @origin.y, 100.0))
+            p1 = Geom::Point3d.new(@origin.x - 1.0, @origin.y, structure_h)
+            p2 = Geom::Point3d.new(@origin.x + 1.0, @origin.y, structure_h)
+            p3 = Geom::Point3d.new(@origin.x, @origin.y - 1.0, structure_h)
+            p4 = Geom::Point3d.new(@origin.x, @origin.y + 1.0, structure_h)
+            edgeh = @spiral_group.entities.add_line(p1, p2)
+            edgev = @spiral_group.entities.add_line(p3, p4)
+            puts "base.spiral.create_spiral"
+            @spiral_group.set_attribute("SpiralAttributes", "start_index",  @start_index)
+            @spiral_group.set_attribute("SpiralAttributes", "end_index",    @end_index)
+            @spiral_group.set_attribute("SpiralAttributes", "radius",       @radius)
+            @spiral_group.set_attribute("SpiralAttributes", "origin",       @origin)
+            @spiral_group.set_attribute("SpiralAttributes", "total_arclen", @total_arclen)
+        end
+
+        def calculate_spiral_origin(section)
+            section_index_z = section.section_index_z
+            entry_tag       = section.entry_tag
+            connector       = section.connector(entry_tag)
+            p0              = connector.position
+            normal          = connector.normal
+            radius          = section.radius
+            direction       = section.direction
+            inline          = Geom::Vector3d.new(-normal.x, -normal.y, 0.0).normalize
+            uz              = Geom::Vector3d.new(0.0, 0.0, 1.0)
+            u0              = nil
+            if direction == "Left"
+                u0 = uz.cross(inline)
+            else
+                u0 = inline.cross(uz)
+            end
+            origin          = Geom::Point3d.new(p0.x + radius*u0.x, p0.y + radius*u0.y, 0.0)
+            return origin
+        end
+        
+        def start_index 
+            return @start_index
+        end
+
+        def end_index
+            return @end_index
+        end
+
+        def radius
+            return @radius
+        end
+
+        def origin
+            return @origin
+        end
+
+        def total_arclen
+            return @total_arclen
+        end
+        
+        def section_in_spiral?(section)
+            if section.section_index_z >= @start_index &&
+               section.section_index_z <= @end_index
+               return true
+            end
+            return false
+        end
+
+        def to_s
+            str = "##################################### Spiral ##########################\n"
+            str += " radius       = #{@radius}\n"
+            str += " origin       = #{@origin}\n"
+            str += " start_index  = #{@start_index}\n"
+            str += " end_index    = #{@end_index}\n"
+            str += " total_arclen = #{@total_arclen}\n"
+            str += "######################################################################\n"
+            return str
+        end
+    end
+
+    def basedata_to_s(basedata, level=1)
+        str =  "######################################### Basedata ########################\n"
+        basedata.each_pair do |k,v|
+            str += sprintf("%30s - %-60s \n", k, "#{v}")
+        end
+        str += "###########################################################################\n"
         return str
+    end
+
+    def print_section_pts(view)
+        n = @slices.section_count
+        n.times do |i|
+            pts = @slices.section_pts(i)
+            q0 = view.screen_coords(pts[0])
+            q1 = view.screen_coords(pts[1])
+            q2 = view.screen_coords(pts[2])
+            puts " i =  #{i} - (#{q0.x.to_f}, #{q0.y.to_f})  (#{q1.x.to_f}, #{q1.y.to_f}) " +
+                              "(#{q2.x.to_f}, #{q2.y.to_f}) "
+        end
+    end    
+    
+    def create_scan(i)
+        pts = @slices.section_pts(i)
+        sp0 = "(#{pts[0].x}, #{pts[0].y})"
+        sp1 = "(#{pts[1].x}, #{pts[1].y})"
+        sp2 = "(#{pts[2].x}, #{pts[2].y})"
+        str = sprintf("%6s, %-26s %-26s %-26s", @zone.zone_name, sp0, sp1, sp2)
+        return str
+    end
+
+    def report_slice_data
+        @slices.report_slice_data
     end
 end
 
@@ -517,5 +501,3 @@ class CreateBase
         $zones.create_bases
     end
 end
-            
-            

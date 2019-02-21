@@ -3,3 +3,8 @@ copyright_hdr.txt
 mylpr
 tstface.rb
 cameratool.rb
+util/
+experiment/
+.DS_Store
+TrackInventory.rtf
+xylocomp_hdr.rtxt

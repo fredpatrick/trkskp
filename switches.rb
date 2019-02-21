@@ -81,7 +81,12 @@ class Switches
                         @switches[switchsection.guid] = switchsection
                         switchsection.outline_visible(false)
                     end
-                elsif sg.name == "base"
+                end
+            end
+        end
+        @switches_group.entities.each do |sg|
+            if ( sg.is_a? Sketchup::Group )
+                if sg.name == "base"
                     base               = Base.new(sg)
                     @@bases[base.guid] = base
                     @@base_count       = @@bases.length

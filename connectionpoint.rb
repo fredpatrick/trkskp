@@ -74,12 +74,16 @@ class StartPoint < ConnectionPoint
         @tag   = "S"
     end
 
-    def theta( apply_flg = false)
+    def theta
         return @theta
     end
 
-    def position( apply_flg = false)
+    def position
         return @position
+    end
+
+    def normal
+        return @normal
     end
 
     def check_slope(slope)
@@ -87,9 +91,9 @@ class StartPoint < ConnectionPoint
     end
 end
 
-class Connector < ConnectionPoint
-    def Connector.init_class_variables
-        @@track_connectors = Hash.new
+class Connector < ConnectionPoint              #NOTE: Attributes position, normal, theta
+    def Connector.init_class_variables         #      have had Section.transformation
+        @@track_connectors = Hash.new          #      applied
         @@delta_max = 0.03125
         @@dot_min   = cos(atan(0.035))
         theta_max = acos(@@dot_min)
@@ -145,8 +149,7 @@ class Connector < ConnectionPoint
             @section_group    =arg0
             @section     = Section.section(@section_group.guid)
             @tag      = arg1
-            @position = face_position(face)
-            @normal = Geom::Vector3d.new(0,0,0) - face.normal
+            @position, @normal, @theta = face_position(face)
             @linked_guid = "UNCONNECTED"
             @label       = "S#{@section.section_index_g}_#{@tag}"
             @connector_group = @section_group.entities.add_group
@@ -154,10 +157,13 @@ class Connector < ConnectionPoint
             @connector_group.layer = "track_sections"
             cname = "ConnectorAttributes"
             @connector_group.attribute_dictionary(cname, true)
-            @connector_group.set_attribute(cname, "tag",         @tag)
-            @connector_group.set_attribute(cname, "linked_guid", @linked_guid)
-            @connector_group.set_attribute(cname, "label", @label)
+            @connector_group.set_attribute(cname, "tag",             @tag)
+            @connector_group.set_attribute(cname, "linked_guid",     @linked_guid)
+            @connector_group.set_attribute(cname, "label",           @label)
             @connector_group.set_attribute(cname, "section_index_g", @section.section_index_g)
+            @connector_group.set_attribute(cname, "position",        @position)
+            @connector_group.set_attribute(cname, "normal",          @normal)
+            @connector_group.set_attribute(cname, "theta",           @theta)
             ##################### Note section_index_g is used only for info in model dumps
             pts = []
             i   = 0
@@ -168,30 +174,69 @@ class Connector < ConnectionPoint
             @face = @connector_group.entities.add_face(pts)
 
         elsif (arg0.is_a? Sketchup::Group) && arg0.name == "connector"
-            arg0.entities.each do |c|
-                if c.is_a? Sketchup::Face
-                    @position = face_position(c)
-                    @normal = Geom::Vector3d.new(0,0,0) - c.normal
-                    @face = c
-                end
-            end
+#           arg0.entities.each do |c|
+#               if c.is_a? Sketchup::Face
+#                   @face = c
+#                   @position, @normal, @theta = face_position(@face)
+#               end
+#           end
             @section_group    = arg1
-            @section      = Section.section(@section_group.guid)
-            cname = "ConnectorAttributes"
-            @tag          = arg0.get_attribute(cname ,"tag")
-            @linked_guid = arg0.get_attribute(cname, "linked_guid")
-            @label       = arg0.get_attribute(cname, "label")
+            @section          = Section.section(@section_group.guid)
+            @tag              = arg0.get_attribute("ConnectorAttributes", "tag")
+            @linked_guid      = arg0.get_attribute("ConnectorAttributes", "linked_guid")
+            @label            = arg0.get_attribute("ConnectorAttributes", "label")
             if @label.nil?
-                @label       = "S#{@section.section_index_g}_#{@tag}"
-                arg0.set_attribute(cname, "label", @label)
+                @label        = "S#{@section.section_index_g}_#{@tag}"
+                arg0.set_attribute("ConnectorAttributes", "label", @label)
             end
-            @connector_group = arg0
+            @position         = arg0.get_attribute("ConnectorAttributes", "position")
+            @normal           = arg0.get_attribute("ConnectorAttributes", "normal")
+            @theta            = arg0.get_attribute("ConnectorAttributes", "theta")
+            @connector_group  = arg0
         end
 
-        x = @normal.x
-        y = @normal.y
-        @theta = atan2(y, x)
     end
+
+    def face_position(face)
+                                # Assume face contains 1 point midway 
+                                # sides of bottom of faces that defines 
+                                # center
+        pts_a = face_points(face)
+        pts   = pts_a[0]
+        ic    = pts_a[1]
+        xform     = @section_group.transformation
+        position = pts[ic].transform(xform)
+        normal   = (Geom::Vector3d.new(0,0,0) - face.normal)
+        theta = atan2(normal.y, normal.x) + atan2(xform.xaxis.y, xform.xaxis.x)
+        normal   = normal.transform(xform)
+        return [position, normal, theta]
+    end
+
+    def face_points(face = nil)
+        f = face
+        if face.nil?
+            f = @face
+        end
+        pts = []
+        f.vertices.each_with_index do |v,i|
+                pts[i] = v.position
+        end
+        i = 0
+        ic = 99
+        while i < pts.length
+            if i+1 != pts.length
+                pc = Geom::Point3d.linear_combination(0.5, pts[i+1], 0.5, pts[i-1])
+            else
+                pc = Geom::Point3d.linear_combination(0.5, pts[0], 0.5, pts[i-1])
+            end
+            if pts[i] == pc
+                ic = i
+            end
+            i = i + 1
+        end
+        return [pts, ic]
+    end
+
     def label
         return @label
     end
@@ -233,43 +278,8 @@ class Connector < ConnectionPoint
         view.draw_polyline(pts)
     end
 
-    def face_position(face)
-                                # Assume face contains 1 point midway 
-                                # sides of bottom of faces that defines 
-                                # center
-        pts_a = face_points(face)
-        pts   = pts_a[0]
-        ic    = pts_a[1]
-        return pts[ic]
-    end
-
-    def face_points(face = nil)
-        f = face
-        if face.nil?
-            f = @face
-        end
-        pts = []
-        f.vertices.each_with_index do |v,i|
-                pts[i] = v.position
-        end
-        i = 0
-        ic = 99
-        while i < pts.length
-            if i+1 != pts.length
-                pc = Geom::Point3d.linear_combination(0.5, pts[i+1], 0.5, pts[i-1])
-            else
-                pc = Geom::Point3d.linear_combination(0.5, pts[0], 0.5, pts[i-1])
-            end
-            if pts[i] == pc
-                ic = i
-            end
-            i = i + 1
-        end
-        return [pts, ic]
-    end
-
     def check_slope(slope)
-        target_slope = self.normal(true).z
+        target_slope = @normal.z
         if  (slope - target_slope).abs > @@slope_max
             UI.messagebox("WARNING: differential slope >> slope_max = #{@@slope_max}\n" +
                           "slope = #{slope}, target_slope = #{target_slope}" )
@@ -279,8 +289,8 @@ class Connector < ConnectionPoint
     end
      
     def close_enough(connector_2)
-        position_1 = self.position(true)
-        position_2 = connector_2.position(true)
+        position_1 = @position
+        position_2 = connector_2.position
         distance = position_1.distance position_2
         $logfile.puts "close_enough: position delta = #{distance}"
         if distance > @@delta_max
@@ -290,8 +300,8 @@ class Connector < ConnectionPoint
             return false
         end
         
-        normal_1 = self.normal(true)
-        normal_2 = connector_2.normal(true)
+        normal_1 = @normal
+        normal_2 = connector_2.normal
         ndot = normal_1.dot normal_2
         ndot = -ndot
         if ndot < 0.0 
@@ -400,42 +410,32 @@ class Connector < ConnectionPoint
         $logfile.puts "connector.tag=, tag updated new tag = #{@tag} #{guid}"
     end
 
-    def position( apply_flg = false)
-        if apply_flg
-            xform = @section_group.transformation
-            return @position.transform xform
-        else
+    def position(app_flg=true)
+        if app_flg == true
             return @position
+        else
+            return @position.transform(@section_group.transformation.inverse)
         end
     end
 
-    def theta(apply_flg = false)
-        if apply_flg
-            xform = @section_group.transformation
-            return @theta + atan2(xform.xaxis.y, xform.xaxis.x)
-        else
+    def theta(app_flg=true)
+        if app_flg == true
             return @theta
-        end
-    end
-
-    def normal (apply_flg = false)
-        if apply_flg
-            xform = @section_group.transformation
-            return @normal.transform xform
         else
-            return @normal
+            xform = @section_group.transformation.inverse
+            return @theta + atan2(xform.xaxis.y, xform.xaxis.x)
         end
     end
 
-    def value
-        return [@tag, @position, @theta]
+    def normal (app_flg=true)
+        return @normal
     end
 
     def to_s(ntab = 1)
-        x = self.position(true).x
-        y = self.position(true).y
-        z = self.position(true).z
-        a = self.theta(true) * 180.0 / Math::PI
+        x = @position.x
+        y = @position.y
+        z = @position.z
+        a = @theta * 180.0 / Math::PI
         stab =""
         n = 0
         while n < ntab

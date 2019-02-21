@@ -56,6 +56,7 @@ class RiserTab
         if rbattrs
             @@point_count    = model.get_attribute("RiserTabAttributes", "point_count")
             @@template       = model.get_attribute("RiserTabAttributes", "template")
+            @@notch_points   = model.get_attribute("RiserTabAttributes", "notch_points")
             @@center_point   = model.get_attribute("RiserTabAttributes", "center_point")
             @@normal         = model.get_attribute("RiserTabAttributes", "normal")
             @@risertab_count = model.get_attribute("RiserTabAttributes", "risertab_count")
@@ -64,23 +65,17 @@ class RiserTab
             @@point_count = model.set_attribute("RiserTabAttributes", "point_count", 9)
             @@template    = model.set_attribute("RiserTabAttributes", "template",
                           [Geom::Point3d.new(-1.00, 0.0, 0.0),
-                           Geom::Point3d.new(-0.75, 0.0, 0.0),
-                           Geom::Point3d.new(-0.50, 0.0, 0.0),
-                           Geom::Point3d.new(-0.25, 0.0, 0.0),
-                           Geom::Point3d.new(-0.00, 0.0, 0.0),
-                           Geom::Point3d.new( 0.25, 0.0, 0.0),
-                           Geom::Point3d.new( 0.50, 0.0, 0.0),
-                           Geom::Point3d.new( 0.75, 0.0, 0.0),
                            Geom::Point3d.new( 1.00, 0.0, 0.0),
-                           Geom::Point3d.new(-1.00, 1.5000, 0.0),
-                           Geom::Point3d.new(-0.75, 1.7071, 0.0),
-                           Geom::Point3d.new(-0.50, 2.0000, 0.0),
-                           Geom::Point3d.new(-0.25, 2.0000, 0.0),
-                           Geom::Point3d.new(-0.00, 2.0000, 0.0),
-                           Geom::Point3d.new( 0.25, 2.0000, 0.0),
-                           Geom::Point3d.new( 0.50, 2.0000, 0.0),
-                           Geom::Point3d.new( 0.75, 1.7071, 0.0),
-                           Geom::Point3d.new( 1.00, 1.5000, 0.0)] )
+                           Geom::Point3d.new( 1.00, 1.5, 0.0),
+                           Geom::Point3d.new( 0.50, 2.0, 0.0),
+                           Geom::Point3d.new(-0.50, 2.0, 0.0),
+                           Geom::Point3d.new(-1.00, 1.5, 0.0)] )
+            notch_w = 0.71875
+            @@notch_points = model.set_attribute("RiserTabAttributes", "notch_points",
+                          [Geom::Point3d.new(-notch_w/2.0, 1.0, 0.0),
+                           Geom::Point3d.new( notch_w/2.0, 1.0, 0.0),
+                           Geom::Point3d.new( notch_w/2.0, 2.0, 0.0),
+                           Geom::Point3d.new(-notch_w/2.0, 2.0, 0.0)])
             @@center_point = Geom::Point3d.new( 0.0, 1.0, -Base.base_thickness)
             @@normal       = Geom::Vector3d.new(0.0, 1.0, 0.0)
             model.set_attribute("RiserTabAttributes", "center_point", @@center_point)
@@ -91,19 +86,127 @@ class RiserTab
         @@risers      = Hash.new
     end
 
-    def initialize(mode, risertab_group, slope = nil, edge_point = nil, edge_normal = nil)
-        puts "risertab.initialize, mode = #{mode}, slope = #{slope}, " +
-                          "edge_point = #{edge_point}, edge_normal = #{edge_normal}"
-        @risertab_group = risertab_group
-        if mode == "build"
-            @risertab_index = Base.risertab_count
-            @risertab_group.set_attribute("RiserTabAttributes", 
-                                          "risertab_index", @risertab_index)
-            Base.increment_risertab_count
-            build_new_risertab(slope, edge_point, edge_normal)
-        else
-            load_existing_risertab
+    def initialize()
+    end
+
+    def build_new_risertab(slope, edge_location, side)
+        model = Sketchup.active_model
+        model.set_attribute("RiserTabAttributes", "risertab_count", @@risertab_count)
+        @risertab_index = Base.risertab_count
+        puts "****************************************************************************" +
+             "******* risertab_index = #{risertab_index}, slope = #{slope} ***************"
+        Base.increment_risertab_count
+        @risertab_group.description = "group risertab risertab_count = #{@risertab_index}"
+        
+        @slope            = slope
+        @slice_index      = edge_location[0]
+        @edge_point       = edge_location[1]
+        @edge_normal      = edge_location[2]
+        @centerline_point = edge_location[3]
+        @ss               = edge_location[4]
+        @side             = side
+
+        theta = atan2(-edge_normal.x, edge_normal.y)
+        xform_rotation    = Geom::Transformation.rotation(Geom::Point3d.new(0.0, 0.0, 0.0),
+                                                           Geom::Vector3d.new(0.0, 0.0, 1.0),
+                                                           theta)
+        xform_translation = Geom::Transformation.translation(edge_point)
+        xform_alpha       = Geom::Transformation.rotation(edge_point, edge_normal, atan(slope))
+        xform_risertab    = xform_alpha * xform_translation * xform_rotation
+
+
+        vz = Geom::Vector3d.new(0.0, 0.0, -Base.base_thickness)
+        pts = []
+        qts = []
+        @@template.each_with_index do |p,i|
+            pts[i] = p
+            qts[i] = p.offset(vz)
         end
+
+        pts.each_with_index { |p,i| pts[i] = p.transform(xform_risertab)}
+        qts.each_with_index { |p,i| qts[i] = p.transform(xform_risertab)}
+        f0 = @risertab_group.entities.add_face(pts[0], pts[1], pts[2], pts[3], pts[4], pts[5])
+        f1 = @risertab_group.entities.add_face(qts[5], qts[4], qts[3], qts[2], qts[1], qts[0])
+        puts "build_risertab, f0 normal = #{f0.normal}"
+        puts "build_risertab, f1 normal = #{f1.normal}"
+        f0.material = Base.base_material
+        f1.material = Base.base_material
+        pts.each_with_index do |p, i|
+            f = @risertab_group.entities.add_face(pts[i-1], qts[i-1], qts[i], pts[i])
+            f.material = Base.base_material
+        end
+        cut_notch(xform_risertab, Base.base_thickness)
+
+        @center_point     = @@center_point.transform(xform_risertab)
+        @normal           = @@normal.transform(xform_risertab)
+        @thickness        = Base.base_thickness
+        puts "risertab.build_new_risertab, @center_point = #{@center_point}, " +
+                    "@normal = #{normal}"
+        rg = @risertab_group
+        rg.set_attribute("RiserTabAttributes", "risertab_index",   @risertab_index)
+        rg.set_attribute("RiserTabAttributes", "center_point",     @center_point)
+        rg.set_attribute("RiserTabAttributes", "normal",           @normal)
+        rg.set_attribute("RiserTabAttributes", "thickness",        @thickness)
+        rg.set_attribute("RiserTabAttributes", "slice_index",      @slice_index)
+        rg.set_attribute("RiserTabAttributes", "slope",            @slope)
+        rg.set_attribute("RiserTabAttributes", "edge_point",       @edge_point)
+        rg.set_attribute("RiserTabAttributes", "edge_normal",      @edge_normal)
+        rg.set_attribute("RiserTabAttributes", "centerline_point", @centerline_point)
+        @risertab_group.set_attribute("RiserTabAttributes", "ss",  @ss)
+        rg.set_attribute("RiserTabAttributes", "side",             @side)
+        
+#       make_pts(xform_risertab)
+
+#       entities = @risertab_group.entities
+#       (@@point_count-1).times{ |i|
+#           f1 = entities.add_face(pt(i  ,0,0), pt(i+1,0,0), pt(i+1,1,0), pt(i  ,1,0))
+#           if i == 0 
+#               vt = Geom::Vector3d::new(0.0,0.0,1.0)
+#               vn = f1.normal
+#               phi = vt.angle_between vn
+#               if phi.abs > Math::PI * 0.5
+#                   f1.reverse!
+#               end
+#           end
+#           f2 = entities.add_face(pt(i  ,1,0), pt(i+1,1,0), pt(i+1,1,1), pt(i  ,1,1))
+#           f3 = entities.add_face(pt(i  ,0,1), pt(i  ,1,1), pt(i+1,1,1), pt(i+1,0,1))
+#           f4 = entities.add_face(pt(i  ,0,0), pt(i  ,0,1), pt(i+1,0,1), pt(i+1,0,0))
+#           entities.add_edges(pt(i,0,0),pt(i+1,0,0))
+#           entities.add_edges(pt(i,1,0),pt(i+1,1,0))
+#           entities.add_edges(pt(i,1,1),pt(i+1,1,1))
+#           entities.add_edges(pt(i,0,1),pt(i+1,0,1))
+#           f1.material = Base.base_material
+#           f2.material = Base.base_material
+#           f3.material = Base.base_material
+#           f4.material = Base.base_material
+#           if i == 0 
+#               f0 = entities.add_face( pt(i  ,0,0), pt(i  ,1,0), pt(i  ,1,1), pt(i  ,0,1))
+#               f0.material = Base.base_material
+#               entities.add_edges(     pt(i  ,0,0), pt(i  ,1,0), pt(i  ,1,1), pt(i  ,0,1))
+#           elsif i == @@point_count - 2
+#               fI = entities.add_face( pt(i+1,0,0), pt(i+1,0,1), pt(i+1,1,1), pt(i+1,1,0))
+#               fI.material = Base.base_material
+#               entities.add_edges(     pt(i+1,0,0), pt(i+1,0,1), pt(i+1,1,1), pt(i+1,0,0))
+#           end 
+#       }
+        risertab_text_group = make_risertab_text(@risertab_group, @risertab_index, theta)
+        risertab_text_group.transformation = xform_risertab
+    end            
+
+    def load_risertab
+        puts "load_existing_risertab, #{@risertab_group.guid}"
+        rg = @risertab_group
+        @risertab_index   = rg.get_attribute("RiserTabAttributes", "risertab_index")
+        @center_point     = rg.get_attribute("RiserTabAttributes", "center_point")
+        @normal           = rg.get_attribute("RiserTabAttributes", "normal")
+        @thickness        = rg.get_attribute("RiserTabAttributes", "thickness")
+        @slice_index      = rg.get_attribute("RiserTabAttributes", "slice_index")
+        @slope            = rg.get_attribute("RiserTabAttributes", "slope")
+        @edge_point       = rg.get_attribute("RiserTabAttributes", "edge_point")
+        @edge_normal      = rg.get_attribute("RiserTabAttributes", "edge_normal")
+        @centerline_point = rg.get_attribute("RiserTabAttributes", "centerline_point")
+        @ss               = rg.get_attribute("RiserTabAttributes", "ss")
+        @side             = rg.get_attribute("RiserTabAttributes", "side")
     end
 
     def make_pts(xform_risertab)
@@ -129,97 +232,59 @@ class RiserTab
         return @@pts[m]
     end
 
-    def build_new_risertab(slope, edge_point, edge_normal)
-        model = Sketchup.active_model
-        model.set_attribute("RiserTabAttributes", "risertab_count", @@risertab_count)
-        @risertab_number = @@risertab_count
-        @risertab_group.description = "group risertab risertab_count = #{@risertab_number}"
-        
-        @@risertab_count += 1
-        @slope            = slope
-        puts "risertab.build_new_risertab, slope = #{slope}, edge_point = #{edge_point}, " +
-                 "edge_normal = #{edge_normal}"
-
-        #theta = Geom::Vector3d.new(0.0, 1.0, 0.0).angle_between(edge_normal)
-        theta = atan2(-edge_normal.x, edge_normal.y)
-        puts "build_new_risertab, theta #{theta.radians}"
-        puts "build_new_risertab, theta #{theta.degrees}"
-        puts "build_new_risertab, theta #{theta}"
-        xform_rotation    = Geom::Transformation.rotation(Geom::Point3d.new(0.0, 0.0, 0.0),
-                                                           Geom::Vector3d.new(0.0, 0.0, 1.0),
-                                                           theta)
-        xform_translation = Geom::Transformation.translation(edge_point)
-        xform_alpha       = Geom::Transformation.rotation(edge_point, edge_normal, atan(slope))
-        xform_risertab    = xform_alpha * xform_translation * xform_rotation
-
-        @center_point     = @@center_point.transform(xform_risertab)
-        @normal           = @@normal.transform(xform_risertab)
-        puts "risertab.build_new_risertab, @center_point = #{@center_point}, " +
-                    "@normal = #{normal}"
-        @risertab_group.set_attribute("RiserTabAttributes", "center_point", @center_point)
-        @risertab_group.set_attribute("RiserTabAttributes", "normal",       @normal)
-        @risertab_group.set_attribute("RiserTabAttributes", "slope",        @slope)
-
-        make_pts(xform_risertab)
-
-        entities = @risertab_group.entities
-        (@@point_count-1).times{ |i|
-            f1 = entities.add_face(pt(i  ,0,0), pt(i+1,0,0), pt(i+1,1,0), pt(i  ,1,0))
-            if i == 0 
-                vt = Geom::Vector3d::new(0.0,0.0,1.0)
-                vn = f1.normal
-                phi = vt.angle_between vn
-                if phi.abs > Math::PI * 0.5
-                    f1.reverse!
-                end
-            end
-            f2 = entities.add_face(pt(i  ,1,0), pt(i+1,1,0), pt(i+1,1,1), pt(i  ,1,1))
-            f3 = entities.add_face(pt(i  ,0,1), pt(i  ,1,1), pt(i+1,1,1), pt(i+1,0,1))
-            f4 = entities.add_face(pt(i  ,0,0), pt(i  ,0,1), pt(i+1,0,1), pt(i+1,0,0))
-            entities.add_edges(pt(i,0,0),pt(i+1,0,0))
-            entities.add_edges(pt(i,1,0),pt(i+1,1,0))
-            entities.add_edges(pt(i,1,1),pt(i+1,1,1))
-            entities.add_edges(pt(i,0,1),pt(i+1,0,1))
-            f1.material = Base.base_material
-            f2.material = Base.base_material
-            f3.material = Base.base_material
-            f4.material = Base.base_material
-            if i == 0 
-                f0 = entities.add_face( pt(i  ,0,0), pt(i  ,1,0), pt(i  ,1,1), pt(i  ,0,1))
-                f0.material = Base.base_material
-                entities.add_edges(     pt(i  ,0,0), pt(i  ,1,0), pt(i  ,1,1), pt(i  ,0,1))
-            elsif i == @@point_count - 2
-                fI = entities.add_face( pt(i+1,0,0), pt(i+1,0,1), pt(i+1,1,1), pt(i+1,1,0))
-                fI.material = Base.base_material
-                entities.add_edges(     pt(i+1,0,0), pt(i+1,0,1), pt(i+1,1,1), pt(i+1,0,0))
-            end 
-        }
-        risertab_text_group = make_risertab_text(@risertab_group, @risertab_index, theta)
-        risertab_text_group.transformation = xform_risertab
-    end            
-
-    def load_existing_risertab
-        @risertab_index = @risertab_group.get_attribute("RiserTabAttributes", "risertab_index")
-        @center_point   = @risertab_group.get_attribute("RiserTabAttributes", "center_point")
-        @normal         = @risertab_group.get_attribute("RiserTabAttributes", "normal")
-        @slope          = @risertab_group.get_attribute("RiserTabAttributes", "slope")
+    def risertab_index
+        return @risertab_index
     end
-
     def center_point
         return @center_point
     end
     def normal
         return @normal
     end
+    def thickness
+        return @thickness
+    end
+    def slice_index
+        return @sice_index
+    end
     def slope
         return @slope
     end
-    def risertab_index
-        return @risertab_index
+    def edge_point
+        return @edge_point
+    end
+    def edge_normal
+        return @edge_normal
+    end
+    def centerline_point
+        return @centerline_point
+    end
+    def ss
+        return @ss
+    end
+    def side
+        return @side
     end
     def guid
         return @risertab_group.guid
     end
+    def to_s(level=1)
+        str = "############################ RiserTab ################################\n"
+        str += Trk.tabs(level) + "risertab_index       = #{@risertab_index}\n"
+        str += Trk.tabs(level) + "center_point         = #{@center_point}\n"
+        str += Trk.tabs(level) + "normal               = #{@normal}\n"
+        str += Trk.tabs(level) + "thickness            = #{@thickness}\n"
+        str += Trk.tabs(level) + "slice_index          = #{@slice_index}\n"
+        str += Trk.tabs(level) + "slope                = #{@slope}\n"
+        str += Trk.tabs(level) + "edge_point           = #{@edge_point}\n"
+        str += Trk.tabs(level) + "edge_normal          = #{@edge_normal}\n"
+        str += Trk.tabs(level) + "centerline_point     = #{@centerline_point}\n"
+        str += Trk.tabs(level) + "ss                   = #{@ss}\n"
+        str += Trk.tabs(level) + "side                 = #{@side}\n"
+        str += "#####################################################################\n"
+        return str
+    end
+
 
     def  make_risertab_text(risertab_group, risertab_index, theta)
         risertab_text_group = risertab_group.entities.add_group
@@ -284,4 +349,111 @@ class RiserTab
         risertab_text_group.transform!  xforms
         return risertab_text_group
     end
-end
+end # end of class RiserTab
+
+class PrimaryRiserTab < RiserTab
+    def initialize(risertab_group)
+        @risertab_group = risertab_group
+        super()
+    end
+    def build_new_risertab(slope, edge_location, side)
+            @risertab_group.set_attribute("RiserTabAttributes", "primary?", true)
+            @risertab_list = RiserTabList.new(@risertab_group)
+            @risertab_list.build_new_risertab_list(self)
+            super(slope, edge_location, side)
+    end
+    def load_risertab
+            @risertab_list = RiserTabList.new(@risertab_group)
+            @risertab_list.load_existing_risertab_list(self)
+            super
+    end
+
+    def risertab_list
+        return @risertab_list
+    end
+
+    def cut_notch(xform, thickness)
+    end
+end # end of class PrimaryRiserTab
+
+class SecondaryRiserTab < RiserTab
+    def initialize(risertab_group)
+        @risertab_group = risertab_group
+        super()
+    end
+    def build_new_risertab(primary_risertab, slope, edge_location, side)
+        @primary_risertab = primary_risertab
+        @risertab_group.set_attribute("RiserTabAttributes", "primary?", false)
+        @risertab_group.set_attribute("RiserTabAttributes", "primary_risertab_guid",
+                                                             primary_risertab.guid)
+        @primary_risertab.risertab_list.add_secondary_risertab(self)
+        super(slope, edge_location, side)
+    end
+    def load_risertab
+        guid = @risertab_group.get_attribute("RiserTabAttriabutes", "primary_risertab_guid")
+        @primary_risertab = Base.risertab(guid)
+        super
+    end
+
+    def cut_notch(xform, thickness)
+        pts = []
+        @@notch_points.each_with_index { |p,i| pts[i] = p.transform(xform) }
+        fn = @risertab_group.entities.add_face(pts)
+        fn.pushpull(-thickness)
+    end
+end # end of class SecondaryRiserTab
+
+class RiserTabList
+    def initialize(risertab_group)
+        @risertab_group   = risertab_group
+        @secondary_risertabs = []
+    end
+    def build_new_risertab_list(primary_risertab)
+        @primary_risertab = primary_risertab
+    end
+
+    def load_existing_risertab_list(primary_risertab)
+        puts "load_existing_risertab_list"
+        @primary_risertab = primary_risertab
+        guids = @risertab_group.get_attribute("RiserTabAttributes", "secondary_guids")
+        if guids
+            puts "load_existing_risertab_list, guids.length = #{guids.length}"
+            if !guids.nil?
+                guids.each_with_index do |sg,i|
+                    @secondary_risertabs[i] = Base.risertab(sg)
+                end
+            end
+        end
+    end
+
+    def add_secondary_risertab(risertab)
+        @secondary_risertabs << risertab
+        guids = []
+        @secondary_risertabs.each_with_index do |sr, i| 
+            guids[i] = sr.guid
+        end
+        @risertab_group.set_attribute("RiserTabAttributes", "secondary_guids", guids)
+    end
+
+    def count
+        return @secondary_risertabs.length
+    end
+
+    def primary_risertab
+        return @primary_risertab
+    end
+
+    def secondary_risertabs(i)
+        return @secondary_risertabs[i]
+    end
+    def to_s(level =1)
+        str = "############################ RiserTabList ################################\n"
+        str += Trk.tabs(level)+"primary risertab_index = #{@primary_risertab.risertab_index}\n"
+        str += Trk.tabs(level) + "secondary risertabs \n"
+        @secondary_risertabs.each_with_index do |s,i|
+            str += Trk.tabs(level) + " #{i} - #{@secondary_risertabs[i].risertab_index}\n"
+        end
+        str = "############################ RiserTabList ################################\n"
+        return str
+    end
+end # end of class RiserTabList

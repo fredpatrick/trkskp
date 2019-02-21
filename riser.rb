@@ -45,521 +45,331 @@
 require 'sketchup.rb'
 require 'langhandler.rb'
 
+$trkdir = "/Users/fredpatrick/wrk/trkskp"
+require "#{$trkdir}/riserbase.rb"
+require "#{$trkdir}/risercolumn.rb"
+require "#{$trkdir}/risertext.rb"
+
 include Math
 include Trk
 
 class Riser
-    def initialize(mode, riser_group, risertab=nil)
-        puts "Riser.initialization"
-        @riser_group = riser_group
-        
-        if mode == "build"
-            @risertab     = risertab
-            @center_point = @risertab.center_point
-            @slope        = @risertab.slope
-            @height       = @center_point.z
-            @target_point = Geom::Point3d.new(@center_point.x, @center_point.y, 0.0)
-            @normal       = @risertab.normal
-            puts to_s
-            $logfile.puts to_s
-            build_new_riser(@target_point, @height, @slope)
-        elsif mode == "load"
-            load_existing_riser
+    def initialize(riser_group, riser_index=nil,
+                   base=nil, basedata=nil, riser_defs=nil,
+                   bottom_base_offset=nil, stop_after_build="No")
+        @riser_group   = riser_group
+        @guid          = riser_group.guid
+        @riserconnector   = []
+        @top_riserbase    = Hash.new
+        @bottom_riserbase = Hash.new
+        @risercolumn      = Hash.new
+        if riser_index.nil?
+            load_riser
+            return
         end
+        @riser_index   = riser_index
+        @base               = base
+        @basedata           = basedata
+        @bottom_base_offset = bottom_base_offset
+        @riser_group.set_attribute("RiserAttributes", "riser_index",        @riser_index)
+        @riser_group.set_attribute("RiserAttributes", "base_guid",          @base.guid)
+        @riser_group.set_attribute("RiserAttributes", "basedata",           @basedata.to_a)
+        @riser_group.set_attribute("RiserAttributes", "bottom_base_offset", @bottom_base_offset)
+        @riser_group.set_attribute("RiserAttributes", "secondary_count",    0)
+
+        rc_index = 0
+        @rcp_def           = riser_defs["risercraddle_p"]
+        rc_type = @rcp_def.get_attribute("TrkDefinitionAttrs", "definition_type")
+        #if rc_type == "risercraddle"
+        @riserconnector[0] = RiserCraddle.new(@rcp_def,       rc_index, 
+                                                  @riser_group, @riser_index, @basedata)
+        #elsif rc_type == "risertab"
+        #    @riserconnector[0] = RiserTab.new(@rc_def,       rc_index,
+        #                                      @riser_group, @riser_index, @basedata)
+        #end
+
+        @slope = @riserconnector[0].slope
+        @riser_group.set_attribute("RiserAttributes", "slope", @slope)
+        attach_count = @riserconnector[0].attach_count
+        attach_count.times do |n|
+            side             = @riserconnector[0].attach_side(n)
+            puts "####################Begin #{side} of Riser ###########################"
+            attach_point  = @riserconnector[0].attach_point(n)
+            attach_crossline = @riserconnector[0].attach_crossline(n)
+            @top_riserbase[side]    = RiserBase.new(self, riser_defs["riserbase_t"], "top", 
+                                              attach_point, attach_crossline, side)
+            @bottom_riserbase[side] = RiserBase.new(self, riser_defs["riserbase_b"], "bottom", 
+                                              attach_point, attach_crossline, side)
+
+            puts @top_riserbase[side].to_s
+            puts @bottom_riserbase[side].to_s
+
+            @risercolumn[side] = RiserColumn.new(self, @riserconnector[0], side,
+                                       @bottom_riserbase[side], @top_riserbase[side])
+            puts "riser.initialization, riser built, side = #{side}"
+            puts @risercolumn[side]
+            outside_face = @risercolumn[side].outside_face
+            if outside_face.nil?
+                puts "riser.initialze, outside_face is nil, side = #{side}"
+            else
+                puts "riser.initialize, outside_face for side = #{side}"
+                outside_face.vertices.each_with_index { |v,i| 
+                    puts "riser.initialize, outside_face, #{i} - #{v.position}" 
+                }
+            end
+            risertext = RiserText.new(self)
+            set_risertext(outside_face, side, risertext)
+            print_riser_centerline(side)
+        end
+
+        @base.register_riser(self)
+        if stop_after_build == "Yes"
+            return
+        end    
+
+        @basedata        = basedata
+        target_point     = basedata["attach_point"]
+        target_crossline = basedata["attach_crossline"]
+        zt               = @basedata["attach_point"].z
+        source_point     = Geom::Point3d.new(0.0, 0.0, zt)
+        source_crossline = Geom::Vector3d.new(0.0, 1.0, 0.0)
+        cos              = source_crossline.dot(target_crossline)
+        sin              = source_crossline.cross(target_crossline).z
+        rotation_angle   = Math.atan2(sin,cos)
+        shift            = target_point - source_point
+        xform_rotate     = Geom::Transformation.rotation(Geom::Point3d.new(0.0, 0.0, 0.0),
+                                                         Geom::Vector3d.new(0.0, 0.0, 1.0), 
+                                                         rotation_angle)
+        xform_translation = Geom::Transformation.translation(shift)
+        riser_xform       = xform_translation * xform_rotate
+        @riser_group.transformation = riser_xform
+    end
+
+    def erase
+        puts "riser.erase, riser_index = #{@riser_index}"
+        @base.unregister_riser(self)
+        @riser_group.erase!
+        @riser_group = nil
+    end
+
+    def load_riser
+        @riser_index        = @riser_group.get_attribute("RiserAttributes", "riser_index")
+        @base_guid          = @riser_group.get_attribute("RiserAttributes", "base_guid")
+        @base               = Base.base(@base_guid)
+        @base.register_riser(self)
+        basedata_a          = @riser_group.get_attribute("RiserAttributes", "basedata")
+        @basedata = Hash.new
+        basedata_a.each { |key,value| @basedata[key] = value}
+        @bottom_base_offset = @riser_group.get_attribute("RiserAttributes", 
+                                                         "bottom_base_offset")
+        @slope              = @riser_group.get_attribute("RiserAttributes", "slope")
+        @riser_group.entities.each do |e|
+            if e.is_a? Sketchup::ComponentInstance
+                if e.name == "risercraddle"
+                    riserconnector = RiserCraddle.new(e)
+                    rc_index       = riserconnector.rc_index
+                    @riserconnector[rc_index] = riserconnector
+                elsif e.name == "risertab"
+                    riserconnector = RiserTab.new(e)
+                    rc_index       = riserconnector.rc_index
+                    @riserconnector[rc_index] = riserconnector
+                elsif e.name == "riserbase"
+                    riserbase = RiserBase.new(e)
+                    side      = riserbase.side
+                    kind      = riserbase.kind
+                    if    kind == "bottom"
+                        @bottom_riserbase[side] = riserbase
+                    elsif kind == "top"
+                        @top_riserbase[side] = riserbase
+                    end
+                end
+            elsif e.is_a? Sketchup::Group
+                if e.name == "risercolumn"
+                    risercolumn = RiserColumn.new(e)
+                    side        = risercolumn.side
+                    @risercolumn[side] = risercolumn
+                end
+            end
+        end
+    end
+
+    def set_risertext(outside_face, side, risertext)
+        risertext_group = risertext.risertext_group
+        bb_text = risertext_group.bounds
+        text_width = bb_text.max.x - bb_text.min.x
+        p0 = Geom::Point3d.new(0.0, 0.0, 0.0)
+        ux = Geom::Vector3d.new(1.0, 0.0, 0.0)
+        uy = Geom::Vector3d.new(0.0, 1.0, 0.0)
+        uz = Geom::Vector3d.new(0.0, 0.0, 1.0)
+        xform_r1 = Geom::Transformation.rotation(p0, ux,  0.5 * Math::PI)
+        xform_r2 = Geom::Transformation.rotation(p0, uy, -0.5 * Math::PI)
+        if side == "left"
+            xform_r3 = Geom::Transformation.rotation(p0, uz, Math::PI)
+        else
+            xform_r3 = Geom::Transformation.rotation(p0, uy, Math::PI)
+        end
+        offset_text = 1.5 + 0.5 * text_width
+        bb          = outside_face.bounds
+        xt = 0.5 * (bb.max.x + bb.min.x)
+        yt = bb.min.y
+        zt = bb.max.z - offset_text
+        puts "riser.set_risertext, bb.max.z = #{bb.max.z}, offset_text = #{offset_text}"
+        target_point = Geom::Point3d.new(xt, yt, zt)
+        puts "riser.set_risertest, target_point = #{target_point}"
+
+        vt = target_point - p0
+        xform_t = Geom::Transformation.translation(vt)
+        xform = xform_t * xform_r3 *xform_r2 * xform_r1
+        risertext_group.transformation=xform
+    end
+
+    def print_riser_centers
+        riser_xform = @riser_group.transformation 
+        str =  "################################## Riser Centers ############################\n"
+        str += "top riserconnector, mount_point = #{@primary_riserconnector.mount_point}\n"
+        str += "insert_point             = #{@top_riserbase.insert_point(riser_xform)}\n"
+        secondary_riserconnector = @riserconnector_list.secondary_riserconnectors("P")
+        if secondary_riserconnector
+            str += "2nd riserconnector, mount_point = #{secondary_riserconnector.mount_point}\n"
+            str += "mount_point              = #{@bottom_riserbase.mount_point(riser_xform)}\n"
+            str += "#########################################################################\n"
+        end
+        return str
+    end
+
+    def print_riser_centerline(side)
+        puts "############################# Riser Centerline #{side} ################"
+        puts "                         TargetPoint                   MountPoint"
+        tp_s = "#{@riserconnector[0].target_point}"
+        mt_s = "#{@riserconnector[0].mount_point}"
+        puts sprintf("RiserConnector     %30s %30s", tp_s, mt_s)
+        tp_s = "#{@top_riserbase[side].target_point(false)}"
+        mt_s = "#{@top_riserbase[side].mount_point(false)}"
+        puts  sprintf("RiserBase-Top     %30s %30s", tp_s, mt_s)
+        tp_s = "#{@bottom_riserbase[side].target_point(false)}"
+        mt_s = "#{@bottom_riserbase[side].mount_point(false)}"
+        puts  sprintf("RiserBase-Bottom  %30s %30s", tp_s, mt_s)
+        puts "########################################################################"
+    end
+
+    def make_layout_transformation(primary_riserconnector, apndx)
+        normal        = primary_riserconnector.attach_crossline(apndx)
+        center_point  = primary_riserconnector.attach_point(apndx)
+        target_point  = Geom::Point3d.new(center_point.x, center_point.y, 0.0)
+        theta = atan2(-normal.x, normal.y)
+        xform_rotation    = Geom::Transformation.rotation(Geom::Point3d.new(0.0, 0.0, 0.0),
+                                                           Geom::Vector3d.new(0.0, 0.0, 1.0),
+                                                           theta)
+        xform_translation = Geom::Transformation.translation(target_point)
+        layout_xform      = xform_translation * xform_rotation
+        return layout_xform
+    end
+
+    def guid
+        return @guid
+    end
+    def slope
+        return @slope
+    end
+
+    def basedata
+        return basedata
+    end
+
+    def bottom_base_offset
+        return @bottom_base_offset
+    end
+
+    def riser_index
+        return @riser_index
+    end
+
+    def riser_group
+        return @riser_group
+    end
+
+    def top_riserbase(side)
+        return @top_riserbase[side]
+    end
+
+    def bottom_riserbase(side)
+        return @bottom_riserbase[side]
+    end
+
+    def primary_riserconnector
+        return @riserconnector[0]
+    end
+
+    def secondary_riserconnector(j)
+        return @riserconnector[j]
     end
 
     def to_s(level = 1)
         str =  "##########################################################\n"
         str += "################### Riser ################################\n"
-        str += Trk.tabs(level) + "riser risertab_index = #{@risertab.risertab_index}\n"
-        str += Trk.tabs(level) + "riser center_point   = #{@centerpoint}\n"
-        str += Trk.tabs(level) + "riser slope          = #{@slope}\n"
-        str += Trk.tabs(level) + "riser height         = #{@height}\n"
-        str += Trk.tabs(level) + "riser target_point   = #{@target_point}\n"
-        str += Trk.tabs(level) + "riser normal         = #{@normal}\n"
+        str += Trk.tabs(level) + "riser_index        = #{@riser_index}\n"
+        str += Trk.tabs(level) + "bottom_base_offset = #{@bottom_base_offset}\n"
+        str += Trk.tabs(level) + "slope              = #{@slope}\n"
         str += "##########################################################\n"
         return str
     end
 
-    def build_new_riser(target_point, height,slope)
-        puts "riser.build_new_risertab, target_point #{target_point}, height = #{height}, " +
-                      "slope = #{slope}"
-        @definition = Trk.select_definition
-        if @definition.nil?
-            working_path = TrackTools.working_path
-            filename = File.join(working_path, "RiserComponents", "riser_base_c.skp")
-            puts "riser.build_new_riser, filename = #{filename}"
-            Sketchup.active_model.definitions.load(filename)
-            @definition = Trk.select_definition
-        end
-        puts Trk.definition_to_s(@definition, 1)
-        instances = @definition.instances
-        instances.each{ |i| puts Trk.instance_to_s(i, 1) }
-        mount_point = @definition.get_attribute("RiserBaseAttributes", "mount_point")
-        insertion_point = @definition.insertion_point
-        bottom_xform = make_transformation(insertion_point, mount_point, 0.0, 180.degrees)
-        top_xform    = make_transformation(insertion_point, mount_point, @height, 0.0)
-        bottom_riser_base = @riser_group.entities.add_instance(@definition, bottom_xform)
-        puts Trk.instance_to_s(bottom_riser_base, 1)
-        top_riser_base    = @riser_group.entities.add_instance(@definition, top_xform)
-        puts Trk.instance_to_s(top_riser_base, 1)
-        puts Trk.definition_to_s(bottom_riser_base.definition, 1)
-        #puts "riser.initialization, got a definition, name = #{@definition.name}"
-        #Sketchup.active_model.entities.add_instance( @definition, Geom::Transformation.new)
-        #rbdef_xform = Geom::Transformation.new
-        #@riser_group.entities.add_instance(@riser_base_def, rbdef_xform)
+    def edit_riser
+        puts "riser.edit_riser"
+        puts @base.basedata_to_s(@basedata)
+        slices = @base.slices
+        q = @basedata["centerline_point"]
+        slice_index = @basedata["slice_index"]
+        slope       = @basedata["slope"]
+        @base.slices.secondary_centerline_point(q, slice_index, slope)
+        #@base.skins.search_skins_faces(@base, @basedata, slices)
     end
 
-    def make_transformation(insertion_point, mount_point, z, rotate)
-        vmove = insertion_point - mount_point 
-        vmove_xform = Geom::Transformation.translation(vmove)
-        rotate_xform = Geom::Transformation.rotation(Geom::Point3d.new(0.0, 0.0, 0.0),
-                                                     Geom::Vector3d.new(0.0, 1.0, 0.0),
-                                                     rotate)
-        height_xform = Geom::Transformation.translation(Geom::Vector3d.new(0.0, 0.0, z))
-        xform = height_xform * rotate_xform * vmove_xform
-        return xform
-    end
-    def edit_base_def
-        puts "riser.edit_base_def"
-        if @riser_base_def.nil?
-            puts "dont have riser_base_c"
-            return nil
-        end
-        attrdicts = @riser_base_def.attribute_dictionaries
-        if !attrdicts.nil?
-             attrdicts.each do |ad|
-                puts ad.name
-                ad.each_pair { |k, v| puts "\t #{k}    #{v}" }
+    def add_secondary(riser_defs)
+        puts "################################################################################"
+        puts "################################################ Add Secondary #################"
+        q           = @basedata["centerline_point"]
+        slice_index = @basedata["slice_index"]
+        slope       = @basedata["slope"]
+        puts "add_secondary, q = #{q}"
+        jmin        = @base.slices.secondary_centerline_point(q, slice_index, slope)
+        puts "               slice_index at minimum = #{jmin}"
+        pick_slice  = @base.slices.slice_points(jmin)
+        z           = pick_slice[1].z
+        p           = Geom::Point3d.new(q.x, q.y, z)
+        pick_location = p
+        facecode      = jmin * 100 + 1
+        pick_mode     = @basedata["pick_mode"]
+        @secondary_basedata = @base.slices.new_basedata(pick_location, facecode, pick_mode)
+        puts @base.basedata_to_s(@secondary_basedata)
+        attach_point= @secondary_basedata["attach_point"]
+        rb_depth    = riser_defs["riserbase_b"].bounds.depth
+        if (attach_point.z - @bottom_base_offset) > rb_depth
+            puts "riser.add_secondary, creating risercraddle"
+            secondary_count = @riser_group.get_attribute("RiserAttributes", "secondary_count")
+            rc_index        = 1 + secondary_count
+            #rc_type = rc_def.get_attribute("TrkDefinitionAttrs", "definition_type")
+            #if rc_type == "risercraddle"
+            @riserconnector[rc_index] = RiserCraddle.new(riser_defs["risercraddle_s"], rc_index,
+                                                             @riser_group, @riser_index, 
+                                                             @secondary_basedata)
+            #elsif rc_type == "risertab"
+            #    @riserconnector[rc_index]= RiserTab.new(rcs_def, rc_index,
+            #                                            @riser_group, @riser_index, 
+            #                                            @secondary_basedata)
+            #end
+            secondary_count += 1
+            @riser_group.set_attribute("RiserAttributes", "secondary_count", secondary_count)
+            @riserconnector[rc_index].side_count.times do |n|
+                side         = @riserconnector[rc_index].attach_side(n)
+                @risercolumn[side].cut_riserconnector_notch(@riserconnector[rc_index])
             end
-        else 
-            puts "riser.edit_base_def, definition has no attribute dictionary"
+        else
+            puts "riser.add_secondary, creating risershim"
+            riser_count = @riser_index + 1
+            riser = RiserShim.new(riser_group, riser_count, 
+                                  @base, @secondary_basedata, @bottom_base_offset)
         end
-        attrd = @riser_base_def.attribute_dictionary("RiserBaseAttributes", true)
-        @riser_base_def.set_attribute("RiserBaseAttributes", "center_point", @center_point)
-        rbdef_xform = Geom::Transformation.new
-        rb = @riser_group.entities.add_instance(@riser_base_def, rbdef_xform)
-        puts "addriser.edit_base_def, added instance"
-        rbd = rb.definition
-        attrdicts = rb.attribute_dictionaries
-        if !attrdicts.nil?
-             attrdicts.each do |ad|
-                puts ad.name
-                ad.each_pair { |k, v| puts "\t #{k}    #{v}" }
-            end
-        else 
-            puts "riser.edit_base_def, instance has no attribute dictionary"
-        end
-        attrdicts = rbd.attribute_dictionaries
-        if !attrdicts.nil?
-             attrdicts.each do |ad|
-                puts ad.name
-                ad.each_pair { |k, v| puts "\t #{k}    #{v}" }
-            end
-        else 
-            puts "riser.edit_base_def, instance def has no attribute dictionary"
-        end
-    end
-
-    def load_definition
-        puts "load_definitions"
-        working_path = TrackTools.working_path
-        component_dir = File.join(working_path, "RiserComponents")
-        filenames = Dir.entries(component_dir)
-        filenames.each{ |f|  puts "load_definitions.filesname #{f}"}
-        m         = 0   
-        tlist = ""
-        filenames.each do |fn|
-            puts "load_definition, fn = #{fn}, extname = #{File.extname(fn)}"
-            if File.extname(fn) == '.skp'
-                if m == 0
-                    tlist = File.basename(fn)
-                else
-                    tlist = tlist + "|#{File.basename(fn)}"
-                end
-                m += 1
-            end
-        end
-        opts = [tlist]
-        puts "load_definition, opts = #{opts}"
-        puts "load_definitions, m = #{m}"
-        title = "Select Component"
-        prompts = ["basename"]
-        defaults = [" "]
-        results = UI.inputbox prompts, defaults, opts, title
-        filename = File.join(component_dir, results[0])
-        puts "load_definition,filename = #{filename}"
-        definition = Sketchup.active_model.definitions.load filename
-        return definition
-    end
-
-    def load_existing_riser
     end
 end
 
-class EditRiserBase
-    def initialize
-        puts "EditRiserBase.initialize"
-        TrackTools.create_directory_attributes
-        puts "################################################################"
-        puts "####################################### EditRiserBase"
-        puts "####################################### #{Time.now.ctime}"
-        $logfile.puts "################################################################"
-        $logfile.puts "####################################### EditRiserBase"
-        $logfile.puts "####################################### #{Time.now.ctime}"
-        $logfile.flush
-
-        cursor_path = Sketchup.find_support_file("riser_cursor_0.png",
-                                                 "Plugins/xc_tracktools/")
-        if cursor_path
-            @cursor_looking = UI.create_cursor(cursor_path, 16, 16) 
-        else
-            UI.messagebox("Couldnt get cursor_path")
-            return
-        end 
-        cursor_path = Sketchup.find_support_file("riser_cursor_1.png", 
-                                                 "Plugins/xc_tracktools/")
-        if  cursor_path
-                             @cursor_on_target = UI.create_cursor(cursor_path, 16, 16) 
-        else
-            UI.messagebox("Couldnt get cursor_path")
-            return
-        end 
-        working_layer = Sketchup.active_model.layers["working"]
-        if !working_layer
-            Sketchup.active_model.layers.add "working"
-        end
-        @definition = Trk::select_definition
-        @complete = @definition.get_attribute("RiserBaseAttributes", "complete?")
-
-        puts "EditriserBase.activate#####################################"
-        puts "EditriserBase.activate#####################################"
-        puts "EditRiserBase.activate definition name = #{@definition.name}"
-        puts "EditRiserBase.activate instances       = #{@definition.count_instances}"
-        puts "EditRiserBase.activate complete        = #{@complete}"
-        puts "EditriserBase.activate#####################################"
-        puts "EditriserBase.activate#####################################"
-        title = @definition.name
-        prompts  = ["erase_instances?", "reset_faces?", "reset attrs?`"]
-        defaults = ["Yes", "No", "No"]
-        tlist    = ["Yes|No", "Yes|No", "Yes|No"]
-        results  = UI.inputbox(prompts, defaults, tlist, title)
-        if results[0] == "Yes" then @erase_instances = true else @erase_instances = false end
-        if results[1] == "Yes" then @reset_faces = true else     @reset_faces = false end
-        if results[2] == "Yes" then @reset_attrs = true else     @reset_attrs = false end
-        puts "#{@erase_instances}, #{@reset_faces}, #{@reset_attrs}"
-
-        if @erase_instances
-            erase_instances
-        end
-        if @reset_faces
-            @cursor_id = @cursor_looking
-            @definition.entities.each do |e|
-                if e.is_a? Sketchup::Face
-                    a2 = e.get_attribute("FaceAttributes", "attach_to")
-                    if a2
-                        puts "EditRiserBase.initialize, a2 = #{a2}"
-                        attribute_dictionary = e.attribute_dictionary("FaceAttributes")
-                        attribute_dictionary.delete_key("attach_to")
-                    end
-                end
-            end
-        end
-        if @reset_attrs
-            set_definition_attributes
-        end
-        @on_target = false
-        @complete  = false
-    end
-
-    def onSetCursor
-        if @cursor_id
-            UI.set_cursor(@cursor_id)
-        end
-    end
-
-    def activate
-        $logfile.puts "############################# activate EditRiserBase #{Time.now.ctime}"
-        puts          "############################# activate EditRiserBase #{Time.now.ctime}"
-        @ip = Sketchup::InputPoint.new
-        @menu_flg = false
-        @ptLast = Geom::Point3d.new 1000, 1000, 1000
-
-        save_layer_state("working")
-
-        if @definition.count_instances == 0
-            @xform = Geom::Transformation.new
-            @instance = Sketchup.active_model.entities.add_instance(@definition, @xform)
-            @instance.layer = "working"
-            @instance.name  = "temp"
-        end
-        #rstatus = EditRiserBase.member_defined?("onRButtonDown")
-        #puts "addriser.activate, onRButtonDown = ${rstatus}"
-    end
-
-    def deactivate(view)
-        $logfile.puts "############################ deactivate EditRiserBase #{Time.now.ctime}"
-        puts          "############################ deactivate EditRiserBase #{Time.now.ctime}"
-        $logfile.flush
-        restore_layer_state
-        erase_instances
-    end
-
-    def onMouseMove( flags, x, y, view)
-        if !@reset_faces then return end
-        @ip.pick view, x, y
-        @ph = view.pick_helper
-        npick = @ph.do_pick(x, y)
-
-        @face = nil
-        @instance = nil
-        if npick > 0
-            ans       = search_for_face(@ph)
-            @face     = ans[0]
-            @instance = ans[1]
-            if @face
-                @cursor_id = @cursor_on_target
-                @on_target = true
-            else
-                @cursor_id = @cursor_looking
-                @on_target = false
-            end
-        end
-    end
-
-    def search_for_face(ph)
-        #puts "editriserbase.search_for_face"
-        pkn = ph.count
-        instance = nil
-        face     = nil
-        pkn.times{ |n|
-            looking_for_face = false
-            path = ph.path_at(n)
-            path.each_with_index{ |e,i| 
-                if e.is_a? Sketchup::ComponentInstance
-                    instance = e
-                elsif (e.is_a? Sketchup::Face) && instance
-                    face = e
-                end
-            }
-        }
-        return [face, instance]
-    end
-
-    def onLButtonDown(flags, x, y, view)
-        puts "EditRiserBase.onLButtonDown"
-        if !@reset_faces then return end
-
-        if @face && @instance
-            facetype = select_facetype
-            if facetype == "insert"
-                @insert_face = @face
-                @face.set_attribute("FaceAttributes", "attach_to", "insert") 
-                puts "onLButtonDown, face attribute attach set to insert"
-            elsif facetype == "mount"
-                @mount_face = @face
-                @face.set_attribute("FaceAttributes", "attach_to", "mount") 
-                puts "onLButtonDown, face attribute attach set to mount"
-            end
-            puts "onLButtonDown, attach_to = " + 
-                            "#{@face.get_attribute('FaceAttributes', 'attach_to')}"
-            reverse_camera
-        end
-        
-        @instance.definition.entities.each do |e|
-            if e.is_a? Sketchup::Face
-                a2 = e.get_attribute("FaceAttributes", "attach_to")
-                if !a2.nil?
-                    puts "onLButtonDown, face_id = #{e.entityID}, attach_to = #{a2}"
-                end
-            end
-        end
-        @complete = test_for_complete
-        set_definition_attributes
-    end
-
-    def set_definition_attributes
-        if @complete
-            mount_face, insert_face = get_attach_faces
-            p0 = insert_face.vertices[0].position
-            p1 = insert_face.vertices[1].position
-            p2 = insert_face.vertices[2].position
-            p3 = insert_face.vertices[3].position
-            q0 = Geom::Point3d.linear_combination(0.5, p0, 0.5, p3)
-            q1 = Geom::Point3d.linear_combination(0.5, p1, 0.5, p2)
-            rotation_axis   = q1 - q0
-            rotation_origin = q0
-            @definition.set_attribute("RiserBaseAttributes", "rotation_origin", rotation_origin)
-            @definition.set_attribute("RiserBaseAttributes", "rotation_axis",   rotation_axis)
-            insert_point = Geom::Point3d.linear_combination(0.5, p1, 0.5, p3)
-            line         = [insert_point, insert_face.normal]
-            mount_point  = Geom.intersect_line_plane(line, mount_face.plane)
-            thickness    = insert_point.distance_to_plane(mount_face.plane)
-            puts "set_definition_attributes thickness = #{thickness}"
-            @definition.set_attribute("RiserBaseAttributes", "thickness",    thickness)
-            @definition.set_attribute("RiserBaseAttributes", "insert_point", insert_point)
-            @definition.set_attribute("RiserBaseAttributes", "mount_point",  mount_point)
-        else
-            puts "EditRiserBase.set_definition_attributes, complete = #{@complete}, "
-                    "cannot set attributes"
-        end
-        puts Trk.definition_to_s(@definition, 2)
-    end
-
-    def select_facetype
-        title = "Select Facetype"
-        prompts = ["FaceType"]
-        defaults = [" "]
-        tlist = ["mount|insert"]
-        results = UI.inputbox prompts, defaults, tlist, title
-        puts "select_factype, results = #{results}"
-        return results[0]
-    end
-
-    def test_for_complete
-        mount_face, insert_face = get_attach_faces
-        if mount_face && insert_face 
-            @complete = true
-        else
-            @complete = false
-        end
-        @definition.set_attribute("RiserBaseAttributes", "complete?", @complete)
-    end
-
-    def get_attach_faces
-        ans = [nil, nil]
-        @definition.entities.each do |e|
-            if e.is_a? Sketchup::Face
-                at2 = e.get_attribute("FaceAttributes", "attach_to")
-                if at2 == "mount"
-                    ans[0] = e
-                    puts "test_for_complete, found mount face"
-                    $logfile.puts "test_for_complete, found mount face"
-                elsif at2 == "insert"
-                    ans[1] = e
-                    puts "test_for_complete, found insert face"
-                    $logfile.puts "test_for_complete, found insert face"
-                end
-            end
-        end 
-        return ans
-    end
-
-    def reverse_camera
-        puts "EditRiserBase.reverse_camera"
-        puts Trk.camera_parms 
-        result = UI.messagebox("Do want to reverse camera.up?", MB_YESNO)
-        if result == IDYES
-            camera = Sketchup.active_model.active_view.camera
-            eye = camera.eye
-            eye = [-eye.x, -eye.y, -eye.z]
-            up = camera.up
-            up = up.reverse
-            camera.set(eye, camera.target, up)
-            puts Trk.camera_parms 
-        end
-    end
-
-    def erase_instances
-        @definition.instances.each{ |i|
-            if !i.nil?
-                result = UI.messagebox("Erase instance name = #{i.name}? ", MB_YESNO)
-                if result == IDYES
-                    i.erase!
-                    puts "deactivate instance is erased"
-                end
-            end
-        }
-    end
-end
-
-class ManageDefinitions
-    def initialize
-        TrackTools.tracktools_init("ManageDefinitions")
-    end
-
-    def activate
-        $logfile.puts "########################## activate ManageDefinitions #{Time.now.ctime}"
-        $logfile.flush
-        puts "########################## activate ManageDefinitions #{Time.now.ctime}"
-        while true do
-            definitions = Sketchup.active_model.definitions
-            prompts = ["Name", "Action"]
-            opts    = " "
-            dopt    = " "
-            m       = 0
-            defs = Hash.new
-            definitions.each_with_index do |d,n|
-                if !d.group?
-                    tag = d.name + " #{d.count_instances}"
-                    defs[d.name] = d
-                    if m == 0
-                        opts = "#{tag}"
-                        dopt = tag
-                    else 
-                        opts = opts + "|#{tag}"
-                    end
-                    m += 1
-                end
-            end
-            actions     = "Dump|Remove|Save"
-            tlist       = [opts , actions]
-            defaults    = [ dopt, "Dump"] 
-            results     = UI.inputbox prompts, defaults, tlist, "Manage Definitions"
-            if !results
-                break
-            end
-            tag, action = results
-            ix = tag.index(' ')
-            dname = tag[0,ix]
-            puts "managedefinitions.activate, dname = #{dname}, action = #{action}"
-            if action == "Dump"
-                puts Trk::definition_to_s(defs[dname], 1)
-                $logfile.puts Trk::definition_to_s(defs[dname], 1)
-            elsif action == "Remove"
-                result = UI.messagebox("Do you really want to remove definition #{dname}",
-                                           MB_YESNO)
-                if result == IDYES
-                    d = defs[dname]
-                    puts "iname = #{d.name}, type = #{d.typename}"
-                    #Sketchup.active_model.definitions.remove(defs[dname])
-                    instances = d.instances
-                    instances.each{ |i| i.erase!}
-                    Sketchup.active_model.definitions.purge_unused
-                    #d.entities.each{ |e| d.entities.erase_entities(e)}
-                    #a = d.attribute_dictionary("RiserBaseAttributes")
-                    #d.attribute_dictionaries.delete(a)
-                end
-            elsif action == "Save"
-                Sketchup.active_model.save
-            end
-        end
-        puts "managedefinitions.actvate pop_tool"
-        model = Sketchup.active_model
-        if !model.nil?
-            puts "managedefinitions.activate, tool_name = #{model.tools.active_tool_name}"
-            tool = Sketchup.active_model.tools.pop_tool
-            puts "managedefinitions.activate-1, tool_name = #{model.tools.active_tool_name}"
-        else
-            puts "managedefinitions.active_model is nil"
-        end
-    end
-
-    def deactivate(view)
-        $logfile.puts "######################### deactivate ManageDefinitions #{Time.now.ctime}"
-        $logfile.flush
-        puts "########################## deactivate ManageDefinitions #{Time.now.ctime}"
-    end
-    def onCancel(reason, view)
-        puts "managedefinitions.onCancel, reason = #{reason}"
-    end
-    def onMouseEnter(view)
-        puts "managedefinitions.onMouseEnter, tool_name = #{Sketchup.active_model.tools.active_tool_name}"
-    end
-    def resume(view)
-        puts "managedefinitions.resume.tool_name = #{Sketchup.active_model.tools.active_tool_name}"
-    end
-    def suspend(view)
-        puts "managedefinitions.suspend, tool_name = #{Sketchup.active_model.tools.active_tool_name}"
-    end
-end

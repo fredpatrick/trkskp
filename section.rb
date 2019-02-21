@@ -397,27 +397,27 @@ class Section
     ##################################################################
     ######################################  make tr_group
     def make_tr_group(target_point, section_point=nil)
-        
+        puts "make_tr_group, target_point = #{target_point.position}, section_point = #{section_point}" 
         uz         = Geom::Vector3d.new(0.0, 0.0, 1.0)
         if !section_point.nil?
             theta_a    = section_point.theta(false)
             position_a = section_point.position(false)
-            theta_t    = target_point.theta(true)
-            position_t = target_point.position(true)
+            theta_t    = target_point.theta
+            position_t = target_point.position
             theta      = theta_t - ( theta_a + Math::PI)
         else                        # this assumes that section_group transformation is defined
             theta_a    = target_point.theta(false)
             position_a = Geom::Point3d.new(0.0, 0.0, 0.0)
-            theta_t    = target_point.theta(true)
-            position_t = target_point.position(true)
+            theta_t    = target_point.theta
+            position_t = target_point.position
             theta      = theta_t + 0.5 * Math::PI
         end
         #puts "make_tr_group: tag_a #{section_point.tag}"
         $logfile.puts "make_tr_group: position_a #{position_a}"
         $logfile.puts "make_tr_group: theta_a #{theta_a*180.0/Math::PI}"
         $logfile.puts "make_tr_group: tag_t #{target_point.tag}"
-        $logfile.puts "make_tr_group: position_t #{position_t}"
-        $logfile.puts "make_tr_group: theta_t #{theta_t*180.0/Math::PI}"
+            $logfile.puts "make_tr_group: position_t #{position_t}"
+            $logfile.puts "make_tr_group: theta_t #{theta_t*180.0/Math::PI}"
         t2         = Geom::Transformation.rotation( position_a, uz, theta)
         x0         = position_t.x - position_a.x
         y0         = position_t.y - position_a.y
@@ -426,6 +426,61 @@ class Section
         tv         = Geom::Transformation.translation( vg )
         tr_group = tv * t2
         return tr_group
+    end
+
+    def make_transformation(target_position, target_normal, source_position, source_normal)
+        source_normal.z = 0.0
+        target_normal.z = 0.0
+        source_normal   = Geom::Vector3d.new(0.0, 0.0, 0.0) - source_normal
+        cos             = source_normal.dot(target_normal)
+        sin             = source_normal.cross(target_normal).z
+        rotation_angle  = Math.atan2(sin, cos)
+        shift           = target_position - source_position
+        xform_rotate    = Geom::Transformation.rotation(source_position,
+                                                        Geom::Vector3d.new(0.0, 0.0, 1.0),
+                                                        rotation_angle)
+        xform_shift     = Geom::Transformation.translation(shift)
+        return xform_shift * xform_rotate
+    end
+
+    def face_position(face)
+                                # Assume face contains 1 point midway 
+                                # sides of bottom of faces that defines 
+                                # center
+        pts_a = face_points(face)
+        pts   = pts_a[0]
+        ic    = pts_a[1]
+        xform     = @section_group.transformation
+        position = pts[ic].transform(xform)
+        normal   = (Geom::Vector3d.new(0,0,0) - face.normal)
+        theta = atan2(normal.y, normal.x) + atan2(xform.xaxis.y, xform.xaxis.x)
+        normal   = normal.transform(xform)
+        return [position, normal, theta]
+    end
+
+    def face_points(face = nil)
+        f = face
+        if face.nil?
+            f = @face
+        end
+        pts = []
+        f.vertices.each_with_index do |v,i|
+                pts[i] = v.position
+        end
+        i = 0
+        ic = 99
+        while i < pts.length
+            if i+1 != pts.length
+                pc = Geom::Point3d.linear_combination(0.5, pts[i+1], 0.5, pts[i-1])
+            else
+                pc = Geom::Point3d.linear_combination(0.5, pts[0], 0.5, pts[i-1])
+            end
+            if pts[i] == pc
+                ic = i
+            end
+            i = i + 1
+        end
+        return [pts, ic]
     end
 
     ##################################################################
@@ -607,12 +662,6 @@ class Section
         sa = sa.sort {|a,b| a[0][0] <=> b[0][0] }
         sa.each do |pair|
             puts "#{pair[0]} #{pair[1]}"
-        end
-    end
-
-    def Section.update_layout_data
-        @@track_sections.each_value do |s|
-            s.make_slices
         end
     end
 

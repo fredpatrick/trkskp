@@ -178,8 +178,27 @@ class Zones
         puts "Zones.create_bases"
         Sketchup.active_model.attribute_dictionaries.delete("BaseAttributes")
         Base.init_class_variables
-        puts Trk.print_attributes( Sketchup.active_model, 2)
+        ad = Sketchup.active_model.attribute_dictionaries["BaseAttributes"]
+        puts "   Base Attributes"
+        ad.each_pair { |k,v| puts  sprintf("%-18s = ", k) + "#{v}" }
+
+        current_zones = Hash.new
+        opts          = "All Zones"
         @zones.each_value do |z|
+            opts         += "|" + z.zone_name
+            current_zones[z.zone_name] = z
+        end
+        results = UI.inputbox(["zones"], [""], [opts], "Create Bases")
+        return if !results
+
+        ans = results[0]
+        if ans == "All Zones"
+            current_zones.each_value do |z|
+                z.erase_base
+                z.add_new_base
+            end
+        else
+            z = current_zones[ans]
             z.erase_base
             z.add_new_base
         end

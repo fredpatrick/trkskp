@@ -606,6 +606,15 @@ module Trk
         return str
     end
 
+    def face_to_s(f)
+        str = "face - persistent_id = #{f.persistent_id} normal = #{f.normal} \n"
+        f.vertices.each_with_index do |v,i| 
+            p = v.position
+            str += sprintf("%2d %15.10f #%15.10f %15.10f \n", i, p.x, p.y, p.z) 
+        end
+        return str
+    end
+
     def save_layer_state(visible_layer = "base")
         @layer_state = Hash.new
         Sketchup.active_model.layers.each{ |l|

@@ -45,6 +45,7 @@
 require 'sketchup.rb'
 require "#{$trkdir}/trk.rb"
 require "#{$trkdir}/riserconnector.rb"
+require "#{$trkdir}/texttag.rb"
 
 include Math
 
@@ -65,8 +66,6 @@ class RiserCraddle < RiserConnector
         end
         rca                 = "RiserConnectorAttrs"
         tda                 = "TrkDefinitionAttrs"
-                rotation_angle = 0.0
-                thickness      = 0.21875
         @mount_point        = @definition.get_attribute(rca, "mount_point")
         @mount_crossline    = @definition.get_attribute(rca, "mount_crossline")
         @side_count         = @definition.get_attribute(rca, "side_count")
@@ -76,6 +75,19 @@ class RiserCraddle < RiserConnector
         @secondary          = @definition.get_attribute(rca, "secondary")
         @thickness          = @definition.get_attribute(rca, "thickness")
         @definition_type    = @definition.get_attribute(tda, "definition_type")
+        if @definition_type == "risercraddle_p"
+            @risertext_points   = @definition.get_attribute(rca, "risertext_points")
+            @risertext_normals  = @definition.get_attribute(rca, "risertext_normals")
+            @attach_face_pid    = @definition.get_attribute(rca, "attach_face_pid")
+            @definition.entities.each do |e|
+                if e.is_a? Sketchup::Face
+                    if e.persistent == @attach_face_pid
+                        @attach_face = e
+                        break
+                    end
+                end
+            end
+        end
         @definition.material = Sketchup::Color.new(255, 255, 0)
         if @instance.nil?                           # creating new instance of risercraddle
             @basedata        = basedata
@@ -102,17 +114,10 @@ class RiserCraddle < RiserConnector
             @instance.name      = "risercraddle"
             @instance.set_attribute("RiserConnectorAttrs", "rc_index", rc_index)
             @instance.material = "PaleGoldenrod"
-            #@instance.material = Sketchup::Color.new(255,255,0)
-        end
-        @cut_faces = []
-        @attach_face = nil
-        @definition.entities.each do |e|
-            if e.is_a? Sketchup::Face
-                i             = e.get_attribute("FaceAttributes", "cut_face")
-                @cut_faces[i] = e if !i.nil?
-                r             = e.get_attribute("FaceAttributes", "attach_face")
-                @attach_face  = e if !r.nil?
+
+            if @definition_type == "risercraddle_p"
             end
+                
         end
 
         @rc_index = @instance.get_attribute("RiserConnectorAttrs", "rc_index")
@@ -122,10 +127,6 @@ class RiserCraddle < RiserConnector
         puts "########################################End RiserCraddle.new ###################"
     end
 
-    def cut_faces
-        return @cut_faces
-    end
-
     def attach_face
         return @attach_face
     end
@@ -133,33 +134,38 @@ class RiserCraddle < RiserConnector
     def guid
         return @guid
     end
+
+    def set_risertext(riser, side)
+        riser_index = riser.riser_index
+        parent_group = riser.riser_group
+        target_point = risertext_point(side)
+        risertext = RiserText.new(parent_group, 0.8, riser_index, side)
+        p0   = risertext.center
+        xform_r = Geom::Transformation.new
+        if side == "right"
+            xform_r = Geom::Transformation.rotation(p0, uz, Math::PI)
+        end
+        vt  = target_point - p0
+        xform_t = Geom::Transformation.translation(vt)
+        risertext.set_transformation( xform_t * xform_r)
+    end
+
 ############################################################### Begin RiserCraddle class defs
     def RiserCraddle.edit_risercraddle(definition) 
         definition.delete_attribute("RiserCraddleAttributes")
         definition.delete_attribute("RiserConnectorAttrs")
-        text       = []
-        tpoint     = []
-        xform      = []
-        tag_groups = []
-        i = 0
+        tags = Hash.new
         definition.insertion_point = Geom::Point3d.new(-1.0, 0.0, 0.0)
         definition.entities.each do |e| 
             if e.is_a? Sketchup::Group
                 if e.name == "tag"
-                    e.entities.each do |t|
-                        if t.is_a? Sketchup::Text
-                            text[i]       = t.text
-                            tpoint[i]     = t.point
-                            xform[i]      = e.transformation
-                            tag_groups[i] = e
-                            i += 1
-                        end
-                    end
+                    texttag = TextTag.new(e, definition)
+                    tags[texttag.text] = texttag
                 end
             end
         end
-        text.each_with_index do |t,i|
-            puts "edit_risercraddle, i = #{i}, #{text[i]}, #{tpoint[i].transform(xform[i])}"
+        tags.each_pair do |k,v|
+            puts "edit_risercraddle, #{k}, #{v}"
         end
         mount_point       = nil
         mount_crossline   = nil
@@ -167,55 +173,42 @@ class RiserCraddle < RiserConnector
         attach_points     = []
         attach_crosslines = []
         attach_normals    = []
-        cut_faces         = []
+        risertext_points  = []
+        risertext_normals = []
         attach_face       = nil
-        text.each_with_index do |t,i|
-            m = 0
-            definition.entities.each_with_index  do |f,k|
-                if f.is_a? Sketchup::Face
-                    m += 1
-                    if (tpoint[i].transform(xform[i])).on_plane?(f.plane)
-                        point     = tpoint[i].transform(xform[i])
-                        normal    = f.normal.transform(xform[i])
-                        crossline = Geom::Vector3d.new(-1.0, 0.0, 0.0).transform(xform[i])
-                        if text[i] == "mount_point"
-                            mount_point       = point
-                            mount_crossline   = crossline
-                            mount_normal      = normal
-                        elsif text[i] == "riser_mount_1"
-                            attach_points[0]     = point
-                            attach_crosslines[0] = crossline
-                            attach_normals[0]    = normal
-                        elsif text[i] == "riser_mount_2"
-                            attach_points[1]     = point
-                            attach_crosslines[1] = crossline
-                            attach_normals[1]    = normal
-                        elsif text[i] == "cut_face_1"
-                            cut_faces[0]         = f
-                        elsif text[i] == "cut_face_2"
-                            cut_faces[1]         = f
-                        elsif text[i] == "attach_face"
-                            attach_face          = f
-                        end
-                    end
-                end
-            end
+       
+        ttag = tags["mount_point"]
+        raise RuntimeError, "edit_risercraddle, no mount_face tag_group" if ttag.nil?
+        definition.set_attribute("RiserConnectorAttrs", "mount_point",       ttag.point)
+        definition.set_attribute("RiserConnectorAttrs", "mount_crossline",   ttag.crossline)
+        definition.set_attribute("RiserConnectorAttrs", "mount_normal",      ttag.normal)
+
+        ttag = tags["risertext_face_1"]
+        raise RuntimeError, "edit_risercraddle, no risertext_face_1 tag_group" if ttag.nil?
+        risertext_points[0]  = ttag.face.bounds.center
+        risertext_normals[0] = ttag.normal
+        ttag = tags["risertext_face_2"]
+        raise RuntimeError, "edit_risercraddle, no risertext_face_2 tag_group" if ttag.nil?
+        risertext_points[1]  = ttag.face.bounds.center
+        risertext_normals[1] = ttag.normal
+        definition.set_attribute("RiserConnectorAttrs", "risertext_points",  risertext_points)
+        definition.set_attribute("RiserConnectorAttrs", "risertext_normals", risertext_normals)
+
+        ttag = tags["attach_face"]
+        raise RuntimeError, "edit_risercraddle, no attach_face tag_group" if ttag.nil?
+        attach_face = ttag.face
+        2.times do |k|
+            attach_points[k]     = risertext_points[k].project_to_plane(attach_face.plane)
+            attach_crosslines[k] = ttag.crossline
+            attach_normals[k]    = ttag.normal
         end
-        definition.set_attribute("RiserConnectorAttrs", "mount_point",       mount_point)
-        definition.set_attribute("RiserConnectorAttrs", "mount_crossline",   mount_crossline)
-        definition.set_attribute("RiserConnectorAttrs", "mount_normal",      mount_normal)
+        definition.set_attribute("RiserConnectorAttrs", "attach_points",     attach_points)
+        definition.set_attribute("RiserConnectorAttrs", "attach_crosslines", attach_crosslines)
+        definition.set_attribute("RiserConnectorAttrs", "attach_normals",    attach_normals)
+
+        attach_face_pid = attach_face.persistent_id
         definition.set_attribute("RiserConnectorAttrs", "side_count",        2)            
-        if attach_points.length > 0
-            definition.set_attribute("RiserConnectorAttrs", "attach_points",     attach_points)
-            definition.set_attribute("RiserConnectorAttrs", "attach_crosslines", attach_crosslines)
-            definition.set_attribute("RiserConnectorAttrs", "attach_normals",    attach_normals)
-        end
-        if cut_faces.length > 0
-            cut_faces.each_with_index { |f,i| f.set_attribute("FaceAttributes", "cut_face", i)}
-        end
-        if !attach_face.nil? 
-            attach_face.set_attribute("FaceAttributes", "attach_face", 1)
-        end
+        definition.set_attribute("RiserConnectorAttrs", "attach_face_pid",   attach_face_pid)
         definition.set_attribute("RiserConnectorAttrs", "thickness",         0.21875)
         ret = UI.messagebox("Define RCA attribute secondary as false?", MB_YESNO)
         if ret == IDYES
@@ -224,5 +217,5 @@ class RiserCraddle < RiserConnector
             definition.set_attribute("RiserConnectorAttrs", "secondary", true )
         end
     end
-    ########################################################## end RiserCraddle class defs
+########################################################## end RiserCraddle class defs
 end

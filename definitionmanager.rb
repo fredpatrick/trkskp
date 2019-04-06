@@ -66,7 +66,6 @@ class DefinitionManager
         @defaults_filnam = ENV["HOME"] + "/wrk/skp/definitionmanager.dflt"
         lines = IO.readlines(@defaults_filnam)
         lines.each do |l|
-            puts "DefinitionManager.activate, l = #{l}"
             words = l.split
             type  = words[0]
             if type == "Default"
@@ -75,16 +74,10 @@ class DefinitionManager
                 @defaults[key] = value
             elsif type == "DefinitionType"
                 words.delete_at(0)
-                puts "DefinitionManager.activate, words = #{words}"
                 key, value = words
                 @definition_types[key] = value
             end
         end
-        puts "DefinitionManager.activate. Defaults"
-        puts "DefinitionManager.activate. Defaults"
-        @defaults.each_pair { |k,v| puts " #{k} --  #{v} " }
-        puts "DefinitionManager.activate. DefinitionTypes"
-        @definition_types.each_pair { |k,v| puts " #{k} --  #{v} " }
     end
 
     def work_on_definition
@@ -102,32 +95,61 @@ class DefinitionManager
     end
 
     def merge_definition()
-        definitions = Sketchup.active_model.definitions
+        current_model = Sketchup.active_model
+        current_path  = current_model.path
+        mergee_path, defname = select_mergee_file()
+        return if mergee_path.nil?
 
-        while true do
-            filname = select_definition_file()
-            break if filname.nil?
-
-            definitions.load(filname)
-        end
-
-        ret = UI.messagebox("Do you want to erase tag groups from definition?",  MB_YESNO)
-        if ret == IDYES
-            while true do
-                definition = select_definition_from_model()
-                break if definition.nil?
-
-                erase_tag_groups(definition)
+        definitions = current_model.definitions
+        definitions.each do |d|
+            if d.name == defname
+                definitions.remove(d)
             end
         end
+        puts "merge_definition, defininition #{defname} removed from #{current_path}"
+        definitions.load(mergee_path)
+        definitions.each do |d| 
+            if d.name == defname
+                edit_definition(d)
+                erase_tag_groups(d)
+            end
+        end
+        return
     end
+
+    def select_mergee_file
+        current_path = Sketchup.active_model.path
+        filename = select_definition_file()
+        return nil if filename.nil?
+
+        mergee_path = File.expand_path(filename)
+        raise  RuntimeError, "mergee_path same as current_path" if mergee_path == current_path
+        tmppath = File.expand_path("tmp.skp")
+        str = "`cp #{mergee_path} #{tmppath}`"
+        eval(str)
+
+        Sketchup.open_file(tmppath)
+        n       = 0
+        defname = ""
+        Sketchup.active_model.definitions.each do |d| 
+            if !d.group? 
+                n += 1
+                defname = d.name
+            end
+        end
+        raise RuntimeError, "definition count != 1" if n != 1
+
+        Sketchup.active_model.close
+        eval("`rm #{tmppath}`")
+        return mergee_path, defname
+    end
+
 
     def select_definition_file
         #dirname  = UI.select_directory(directory: "#{ENV['HOME'] + '/wrk/skp'}")  
         dirname  = UI.select_directory()  
         return if dirname.nil?
         filnames = make_filenames(dirname)
-        puts "select_definition, filnames = #{filnames}"
         title    = "Select File from #{dirname}"
         results  = UI.inputbox ["filname"], [" "], [filnames], title
         return nil if results == false
@@ -182,28 +204,7 @@ class DefinitionManager
                 end
                 return nil
             elsif action == "Edit"
-                def_type = prompt_for_type(definition) 
-                code = make_edit_definition
-                puts "do_action, definition_type = #{def_type}"
-                puts "do_action, ###################### code #######################"
-                puts " #{code}"
-                puts "do_action, ################## end code #######################"
-                Trk.traverse_for_entity(definition, ["Face", "Edge"]) { |e, path| 
-                    e.delete_attribute("FaceAttributes") if e.typename == "Face"
-                    e.delete_attribute("EdgeAttributes") if e.typename == "Edge"
-                }
-                definition.delete_attribute("TrkDefinitionAttrs")
-                definition.set_attribute("TrkDefinitionAttrs",  "definition_type", def_type)
-                definition.set_attribute("TrkDefinitionAttrs",  "timedate",       "#{Time.now}")
-               #RiserBase.edit_riserbase(definition)
-                begin
-                    DefinitionManager.class_eval code
-                rescue => ex
-                    puts ex.to_s
-                    trace = ex.backtrace
-                    trace.each{ |s| puts s}
-                    Sketchup.active_model.tools.pop_tool
-                end
+                edit_definition(definition)
                 #puts Trk.definition_to_s(definition, 2)
                 ret = UI.messagebox("Do you want to save results of edit?", MB_YESNO)
                 if ret == IDYES
@@ -220,6 +221,27 @@ class DefinitionManager
             elsif action == "EraseTagGroups"
                 erase_tag_groups(definition)
             end
+        end
+    end
+
+    def edit_definition(definition)
+        def_type = prompt_for_type(definition) 
+        code = make_edit_definition
+        Trk.traverse_for_entity(definition, ["Face", "Edge"]) { |e, path| 
+            e.delete_attribute("FaceAttributes") if e.typename == "Face"
+            e.delete_attribute("EdgeAttributes") if e.typename == "Edge"
+        }
+        definition.delete_attribute("TrkDefinitionAttrs")
+        definition.set_attribute("TrkDefinitionAttrs",  "definition_type", def_type)
+        definition.set_attribute("TrkDefinitionAttrs",  "timedate",       "#{Time.now}")
+       #RiserCraddle.edit_risercraddle(definition)
+        begin
+            DefinitionManager.class_eval code
+        rescue => ex
+            puts ex.to_s
+            trace = ex.backtrace
+            trace.each{ |s| puts s}
+            Sketchup.active_model.tools.pop_tool
         end
     end
 
@@ -369,7 +391,6 @@ class DefinitionManager
     end
 
     def make_filenames(dirname)
-        puts "make_filenames, dirname = #{dirname}"
         if !Dir.exist?(dirname) then return "" end
         Dir.chdir(dirname)
         fs = Dir['*.skp']

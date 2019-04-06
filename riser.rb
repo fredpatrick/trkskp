@@ -117,9 +117,10 @@ class Riser
                     puts "riser.initialize, outside_face, #{i} - #{v.position}" 
                 }
             end
-            risertext = RiserText.new(self)
-            set_risertext(outside_face, side, risertext)
+            risertext = RiserText.new(@risercolumn[side].group, 1.0, @riser_index, side)
+            @risercolumn[side].set_risertext(outside_face, side, risertext)
             print_riser_centerline(side)
+            risertext_craddle = RiserText.new(@riserconnector[0].group, 0.8, @riser_index, side)
         end
 
         @base.register_riser(self)

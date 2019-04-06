@@ -99,22 +99,27 @@ include Trk
                 end
             end
         end
+        @base_count = 0
         @zone_group.entities.each do |e|
             if ( e.is_a? Sketchup::Group )
                 if e.name == "base"
                     @base              = Base.factory(e)
                     @base.load_existing_base
+                    @base_count += 1
                 end
             end
         end
+        @zone_group.set_attribute("ZoneAttributes", "base_count", @base_count)
         @zone_group.set_attribute("ZoneAttributes", "section_count",     @section_count)
     end
 
     def add_new_base
-        puts "zone.add_new_base"
+        puts "zone.add_new_base to zone #{@zone_name}"
         @base_group        = @zone_group.entities.add_group
         @base_group.name   = "base"
         @base              = Base.factory(@base_group, self)
+        @base_count += 1
+        @zone_group.set_attribute("ZoneAttributes", "base_count", @base_count)
     end
 
     def erase_base
@@ -198,6 +203,7 @@ include Trk
         @valid         = true
         @sections      = Hash.new
         @section_count = 0
+        @base_count    = 0
         @zone_group.set_attribute("ZoneAttributes", "section_count",     @section_count)
         @zone_group.set_attribute("ZoneAttributes", "base_count",        @base_count)
         set_zone_attributes(@start_switch_guid, @start_switch_tag, "", "")

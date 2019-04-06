@@ -67,55 +67,34 @@ class RiserColumn
 
         @pb, @inside_pts_b, @outside_pts_b = bottom_riserbase.insert_points
         @qt, @inside_pts_t, @outside_pts_t = top_riserbase.insert_points
-        puts "risercolumn.initialize, outside_pts"
-        puts "risercolumn.initialize, top    #{@outside_pts_t[0]} -- #{@outside_pts_t[1]} "
-        puts "risercolumn.initialize, bottom #{@outside_pts_b[0]} -- #{@outside_pts_b[1]} "
-        puts "risercolumn.initialize, inside_pts"
-        puts "risercolumn.initialize, top    #{@inside_pts_t[0]} -- #{@inside_pts_t[1]} "
-        puts "risercolumn.initialize, bottom #{@inside_pts_b[0]} -- #{@inside_pts_b[1]} "
         insert_point = @bottom_riserbase.insert_point
         mount_point  = @bottom_riserbase.mount_point
         @faces = Hash.new
         top_pts = []
         bot_pts = []
         bz      = @bottom_riserbase.insert_point.z
-        puts "risercolumn.initialize top_pts bot_pts"
         @qt.each_with_index do |q,i|
             top_pts[i] = q
             bot_pts[i] = Geom::Point3d.new(q.x, q.y, bz)
-            puts "   #{i} #{point3d_to_s(top_pts[i])} #{point3d_to_s(bot_pts[i])}"
         end
-        puts "risercolumn.initialize, outside_pts_t[0] = #{@outside_pts_t[0]}, " +
-                        "outside_pts_t[1] = #{@outside_pts_t[1]}"
 
         @inside_face_pts = nil
         @outside_face_pts = []
-        puts "printing object_id for @outside_face_ptsi-0"
-        puts @outside_face_pts.object_id
         top_pts.each_with_index do |p,i|
             f = @risercolumn_group.entities.add_face(bot_pts[i-1], top_pts[i-1], 
                                                      top_pts[i  ], bot_pts[i  ])
             pts = outside_face_pts?(f)
             if !pts.nil? 
-                puts "risercolumn.initialize, outside_face_pts found #{@outside_face_pts}"
-                puts @outside_face_pts
                 pts.each_with_index do |q,i|
                     @outside_face_pts[i] = q
-                    puts "risercolumn.initialize, #{i} #{q}"
                 end
-                puts "printing object_id for @outside_face_pts-1"
-                puts @outside_face_pts.object_id
             end
             pts = inside_face_pts?(f)
             @inside_face_pts = pts if !pts.nil?
             @risercolumn_group.entities.add_edges(bot_pts[i  ], top_pts[i  ])
         end
-        puts "printing object_id for @outside_face_pts-2"
-        puts @outside_face_pts.object_id
-        puts "#{@outside_face_pts}"
         f = @risercolumn_group.entities.add_face(top_pts)
         @faces[f.persistent_id] = f
-        puts "risercolumn.initialize, add top face, persistent id = #{f.persistent_id}"
         f = @risercolumn_group.entities.add_face(bot_pts)
         @faces[f.persistent_id] = f
         puts "risercolumn.initialize, add top bottom, persistent id = #{f.persistent_id}"
@@ -134,49 +113,11 @@ class RiserColumn
         p1 = Geom::Point3d.new(xc + key_width/2.0, yc, z0)
         p2 = Geom::Point3d.new(xc + key_width/2.0, yc, z1)
         p3 = Geom::Point3d.new(xc - key_width/2.0, yc, z1)
-        puts "risercolumn.initialize, key_depth  = #{key_depth}"
-        puts "risercolumn.initialize, key_width  = #{key_width}"
-        puts "risercolumn.initialize, key_height = #{key_height}"
-        puts "risercolumn.initialize, xc         = #{xc}"
-        puts "risercolumn.initialize, yc         = #{yc}"
-        puts "risercolumn.initialize, z0         = #{z0}"
-        puts "risercolumn.initialize, z1         = #{z1}"
-        puts "risercolumn.initialize, p0         = #{point3d_to_s(p0)}"
-        puts "risercolumn.initialize, p1         = #{point3d_to_s(p1)}"
-        puts "risercolumn.initialize, p2         = #{point3d_to_s(p2)}"
-        puts "risercolumn.initialize, p3         = #{point3d_to_s(p3)}"
         f     = @risercolumn_group.entities.add_face(p0, p1,p2,p3)
         if !f.nil?
-            puts "risercolumn.initilize. normal = #{f.normal}"
-            f.vertices.each_with_index do |v,i|
-                puts "risercolumn.initialize #{i} #{point3d_to_s(v.position)}"
-            end
             f.pushpull( -key_height * 0.5)
         else
             puts "risercolumn.initialize, f is nil"
-        end
-
-
-        puts "risercolumn.initialize, after pushpull @faces.length = #{@faces.length}"
-        @faces.each_pair do |k,v|
-            puts "    #{k}  --  #{v}" 
-        end
-        @risercolumn_group.entities.each_with_index do |e,i|
-            if e.is_a? Sketchup::Face
-                puts "risercolumn.initialize, i = #{i}, id = #{e.persistent_id} "
-                level = 1
-                str = ""
-                attrdicts = e.attribute_dictionaries
-                if !attrdicts.nil?
-                    attrdicts.each do |ad|
-                        str +=  Trk.tabs(level+1) + "#{ad.name}"
-                        ad.each_pair do  |k,v| 
-                            str +=  Trk.tabs(level+2) + " #{k}    #{v}"
-                        end
-                    end
-                    puts str
-                end
-            end
         end
     end
 
@@ -236,11 +177,6 @@ class RiserColumn
     end
 
     def outside_face
-        puts "risercolumn.outside_face, outside_face_pts #{@outside_face_pts}"
-        puts self
-        puts "printing object_id for @outside_face_pts-3"
-        puts @outside_face_pts.object_id
-        @outside_face_pts.each_with_index { |p,i| puts "  #{i}  --  #{p}" }
         oface = nil
         @risercolumn_group.entities.each do |e|
             if e.is_a? Sketchup::Face
@@ -265,13 +201,44 @@ class RiserColumn
         q2pp = q2p.offset(vthick)
 
         f = @risercolumn_group.entities.add_face( q3p, q2p, q2pp, q3pp)
-        puts "risercolumn.inititiaize, before pushpull"
-        f.vertices.each_with_index { |q,i| puts "cut_riserconnector_notch, #{i}, " +
-                            "q = #{q.position}" }
         f.pushpull( -0.375)
     end
 
     def side
         return @side
     end
+
+    def group
+        return @risercolumn_group
+    end
+
+    def set_risertext(outside_face, side, risertext)
+        bb_text = risertext.bounds
+        text_width = bb_text.max.x - bb_text.min.x
+        p0 = Geom::Point3d.new(0.0, 0.0, 0.0)
+        ux = Geom::Vector3d.new(1.0, 0.0, 0.0)
+        uy = Geom::Vector3d.new(0.0, 1.0, 0.0)
+        uz = Geom::Vector3d.new(0.0, 0.0, 1.0)
+        xform_r1 = Geom::Transformation.rotation(p0, ux,  0.5 * Math::PI)
+        xform_r2 = Geom::Transformation.rotation(p0, uy, -0.5 * Math::PI)
+        if side == "left"
+            xform_r3 = Geom::Transformation.rotation(p0, uz, Math::PI)
+        else
+            xform_r3 = Geom::Transformation.rotation(p0, uy, Math::PI)
+        end
+        offset_text = 1.5 + 0.5 * text_width
+        bb          = outside_face.bounds
+        xt = 0.5 * (bb.max.x + bb.min.x)
+        yt = bb.min.y
+        zt = bb.max.z - offset_text
+        puts "riser.set_risertext, bb.max.z = #{bb.max.z}, offset_text = #{offset_text}"
+        target_point = Geom::Point3d.new(xt, yt, zt)
+        puts "riser.set_risertest, target_point = #{target_point}"
+
+        vt = target_point - p0
+        xform_t = Geom::Transformation.translation(vt)
+        xform = xform_t * xform_r3 *xform_r2 * xform_r1
+        risertext.set_transformation(xform)
+    end
+
 end

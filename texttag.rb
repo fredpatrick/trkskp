@@ -40,90 +40,75 @@
 # (INCLUDING  NEGLIGENCE OR  OTHERWISE) ARISING IN  ANY WAY OUT OF THE  USE OF
 # THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 # 
-#
-
+ 
 require 'sketchup.rb'
 require 'langhandler.rb'
 
 include Math
 include Trk
 
-class RiserText
-    def initialize(parent_group, text_h, riser_index, side)
-        @riser_index           = riser_index
+class TextTag
+    def initialize(tag_group, definition)
+        raise RuntimeError, "Not legit1mate tag_group" if tag_group.name != "tag" 
 
-        @risertext_group       = parent_group.entities.add_group
-        @risertext_group.name  = "risertext"
-        @risertext_group.layer = "base"
-
-        z      = 0.03125
-        ofont  = "Courier"
-        obold  = false
-        ofill  = false
-        if side == "left"
-            t = "L"
-        elsif side == "right"
-            t = "R"
+        @tag_group = tag_group
+        @xform     = tag_group.transformation
+        @tag_group.entities.each do |e|
+            if e.is_a? Sketchup::Text
+                @text = e.text
+                @point = e.point.transform(@xform)
+                break
+            end
         end
-        txt    = sprintf("%03d%1s", @riser_index, t)
-        @test = txt
-        char_group = risertext_group.entities.add_group
-        char_group.entities.add_3d_text(txt, TextAlignLeft, 
-                     ofont, obold, false, text_h, 0.6, z, ofill)
-        char_group.name = "char_group"
-        bb_text = char_group.bounds
-        xmn      = bb_text.min.x - 0.03125
-        xmx      = bb_text.max.x + 0.03125
-        ymn      = bb_text.min.y - 0.03125
-        ymx      = bb_text.max.y + 0.03125
-        bkz      = 0.015625
-        p0   = Geom::Point3d.new(xmn, ymn, bkz)
-        p1   = Geom::Point3d.new(xmn, ymx, bkz)
-        p2   = Geom::Point3d.new(xmx, ymx, bkz)
-        p3   = Geom::Point3d.new(xmx, ymn, bkz)
-        face = char_group.entities.add_face(p0, p1, p2, p3)
-        face.back_material= "white"
-        face.material = "white"
-        face.edges.each {|e| e.hidden=true}
-        bb= char_group.bounds
-        
-        target_point = Geom::Point3d.new(0.0, 0.0, 0.0)
-        vt    = target_point - Geom::Point3d.new(bb.center.x, bb.center.y, 0.0)
-        xform = Geom::Transformation.translation( vt)
-        char_group.transform! xform
-        char_entities = char_group.explode
-        @bounds = @risertext_group.bounds
+        @face = find_face(definition)
+        raise RuntimeError, "Couldn't match face" if @face.nil?
     end
 
-    def set_transformation(xform)
-        risertext_group.transformation = xform
-    end
-
-    def risertext_group
-        return @risertext_group
+    def xform 
+        return @xform
     end
 
     def text 
         return @text
     end
 
-    def bounds
-        return @bounds
+    def point
+        return @point
     end
 
-    def center
-        return @bounds.center
+    def crossline
+        return Geom::Vector3d.new(-1.0, 0.0, 0.0).transform(@xform)
     end
 
-    def height
-        return @bounds.height
+    def face
+        return @face
     end
 
-    def width
-        return @bounds.width
+    def normal
+        return face.normal
+    end
+  
+    def find_face(definition)
+        f = nil
+        definition.entities.each_with_index do |e,k|
+            if e.is_a? Sketchup::Face
+                if @point.on_plane?(e.plane)
+                    f = e if e.classify_point(@point) == Sketchup::Face::PointInside
+                end
+            end
+        end
+        return f
     end
 
-    def depth
-        return @bounds.depth
+    def to_s
+        str = "TextTag instance, persistent_id = #{@tag_group.persistent_id} \n"
+        str += "    text      = #{@text} \n"
+        str += "    point     = #{@point} \n"
+        str += "    face pid  = #{@face.persistent_id} \n"
+        str += "    normal    = #{normal} \n"
+        str += "    crossline = #{crossline} \n"
+        str += "    center    = #{@face.bounds.center} \n"
+        return str
     end
+        
 end

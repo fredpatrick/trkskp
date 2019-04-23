@@ -459,7 +459,7 @@ class Base
     def basedata_to_s(basedata, level=1)
         str =  "######################################### Basedata ########################\n"
         basedata.each_pair do |k,v|
-            str += sprintf("%30s - %-60s \n", k, "#{v}")
+            str += sprintf("%-30s - %-60s \n", k, "#{v}")
         end
         str += "###########################################################################\n"
         return str

@@ -56,7 +56,7 @@ include Trk
 class Riser
     def initialize(riser_group, riser_index=nil,
                    base=nil, basedata=nil, riser_defs=nil,
-                   bottom_base_offset=nil, stop_after_build="No")
+                   stop_after_build="No")
         @riser_group   = riser_group
         @guid          = riser_group.guid
         @riserconnector   = []
@@ -70,12 +70,28 @@ class Riser
         @riser_index   = riser_index
         @base               = base
         @basedata           = basedata
-        @bottom_base_offset = bottom_base_offset
+        @bottom_base_offset = 0.0
         @riser_group.set_attribute("RiserAttributes", "riser_index",        @riser_index)
         @riser_group.set_attribute("RiserAttributes", "base_guid",          @base.guid)
         @riser_group.set_attribute("RiserAttributes", "basedata",           @basedata.to_a)
-        @riser_group.set_attribute("RiserAttributes", "bottom_base_offset", @bottom_base_offset)
         @riser_group.set_attribute("RiserAttributes", "secondary_count",    0)
+
+        @basedata        = basedata
+        target_point     = basedata["attach_point"]
+        target_crossline = basedata["attach_crossline"]
+        zt               = @basedata["attach_point"].z
+        source_point     = Geom::Point3d.new(0.0, 0.0, zt)
+        source_crossline = Geom::Vector3d.new(0.0, 1.0, 0.0)
+        cos              = source_crossline.dot(target_crossline)
+        sin              = source_crossline.cross(target_crossline).z
+        rotation_angle   = Math.atan2(sin,cos)
+        shift            = target_point - source_point
+        xform_rotate     = Geom::Transformation.rotation(Geom::Point3d.new(0.0, 0.0, 0.0),
+                                                         Geom::Vector3d.new(0.0, 0.0, 1.0), 
+                                                         rotation_angle)
+        xform_translation = Geom::Transformation.translation(shift)
+        riser_xform       = xform_translation * xform_rotate
+        @riser_group.transformation = riser_xform
 
         rc_index = 0
         @rcp_def           = riser_defs["risercraddle_p"]
@@ -96,13 +112,20 @@ class Riser
             puts "####################Begin #{side} of Riser ###########################"
             attach_point  = @riserconnector[0].attach_point(n)
             attach_crossline = @riserconnector[0].attach_crossline(n)
+            structure_p  = attach_point.transform(riser_xform)
+            structure_h  = Trk.find_structure_top(structure_p)
+            @bottom_base_offset = structure_h if structure_h > @bottom_base_offset
+            puts "riser.initialize, ******************************riser_index = #{@riser_index}"
+            puts "riser.initialize, ******************************side = #{side}"
+            puts "riser.initialize, ******************************structure_p = #{structure_p}"
+            puts "riser.initialize, ******************************structure_h = #{structure_h}"
             @top_riserbase[side]    = RiserBase.new(self, riser_defs["riserbase_t"], "top", 
-                                              attach_point, attach_crossline, side)
+                                              attach_point, structure_h,attach_crossline, side)
             @bottom_riserbase[side] = RiserBase.new(self, riser_defs["riserbase_b"], "bottom", 
-                                              attach_point, attach_crossline, side)
+                                              attach_point, structure_h,attach_crossline, side)
 
-            puts @top_riserbase[side].to_s
-            puts @bottom_riserbase[side].to_s
+            #puts @top_riserbase[side].to_s
+            #puts @bottom_riserbase[side].to_s
 
             @risercolumn[side] = RiserColumn.new(self, @riserconnector[0], side,
                                        @bottom_riserbase[side], @top_riserbase[side])
@@ -111,39 +134,18 @@ class Riser
             outside_face = @risercolumn[side].outside_face
             if outside_face.nil?
                 puts "riser.initialze, outside_face is nil, side = #{side}"
-            else
-                puts "riser.initialize, outside_face for side = #{side}"
-                outside_face.vertices.each_with_index { |v,i| 
-                    puts "riser.initialize, outside_face, #{i} - #{v.position}" 
-                }
             end
             risertext = RiserText.new(@risercolumn[side].group, 1.0, @riser_index, side)
             @risercolumn[side].set_risertext(outside_face, side, risertext)
             print_riser_centerline(side)
-            risertext_craddle = RiserText.new(@riserconnector[0].group, 0.8, @riser_index, side)
+            @riserconnector[0].set_risertext(self, side)
         end
+        @riser_group.set_attribute("RiserAttributes", "bottom_base_offset", @bottom_base_offset)
 
         @base.register_riser(self)
         if stop_after_build == "Yes"
             return
         end    
-
-        @basedata        = basedata
-        target_point     = basedata["attach_point"]
-        target_crossline = basedata["attach_crossline"]
-        zt               = @basedata["attach_point"].z
-        source_point     = Geom::Point3d.new(0.0, 0.0, zt)
-        source_crossline = Geom::Vector3d.new(0.0, 1.0, 0.0)
-        cos              = source_crossline.dot(target_crossline)
-        sin              = source_crossline.cross(target_crossline).z
-        rotation_angle   = Math.atan2(sin,cos)
-        shift            = target_point - source_point
-        xform_rotate     = Geom::Transformation.rotation(Geom::Point3d.new(0.0, 0.0, 0.0),
-                                                         Geom::Vector3d.new(0.0, 0.0, 1.0), 
-                                                         rotation_angle)
-        xform_translation = Geom::Transformation.translation(shift)
-        riser_xform       = xform_translation * xform_rotate
-        @riser_group.transformation = riser_xform
     end
 
     def erase
@@ -244,6 +246,8 @@ class Riser
         tp_s = "#{@riserconnector[0].target_point}"
         mt_s = "#{@riserconnector[0].mount_point}"
         puts sprintf("RiserConnector     %30s %30s", tp_s, mt_s)
+        tp_s = "#{@riserconnector[0].attach_rt_point(side)}"
+        puts  sprintf("RiserBase-RiserText %30s", tp_s)
         tp_s = "#{@top_riserbase[side].target_point(false)}"
         mt_s = "#{@top_riserbase[side].mount_point(false)}"
         puts  sprintf("RiserBase-Top     %30s %30s", tp_s, mt_s)

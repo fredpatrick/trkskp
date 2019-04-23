@@ -50,7 +50,7 @@ include Trk
 
 class RiserBase
     def initialize(arg, riserbase_definition = nil, riserbase_kind = "",
-                   attach_point=nil, attach_crossline=nil, side=nil)
+                   attach_point=nil, structure_h=nil, attach_crossline=nil, side=nil)
         if arg.is_a? Sketchup::ComponentInstance
             @instance = arg
             @name     = @instance.name
@@ -61,6 +61,7 @@ class RiserBase
                                                      "insert_point")
             @side         = @instance.get_attribute("RiserBaseAttributes", "side")
             @kind         = @instance.get_attribute("RiserBaseAttributes", "kind")
+            @structure_h  = @instance.get_attribute("RiserBaseAttributes", "structure_h")
             return
         end
         riser                = arg
@@ -70,23 +71,24 @@ class RiserBase
         @mount_point     = definition.get_attribute("RiserBaseAttributes", "mount_point")
         @mount_crossline = definition.get_attribute("RiserBaseAttributes", "mount_crossline")
         @insert_point    = definition.get_attribute("RiserBaseAttributes", "insert_point")
-        @side = side
-        @kind = riserbase_kind
-        @attach_point = attach_point
-        @target_point = attach_point
-        slope = riser.slope
-        bottom_base_offset = riser.bottom_base_offset
-        xform_flip = Geom::Transformation.new
+        @side            = side
+        @kind            = riserbase_kind
+        @structure_h     = structure_h
+        @attach_point    = attach_point
+        @target_point    = attach_point
+        slope            = riser.slope
+        @structure_h     = structure_h
+        xform_flip       = Geom::Transformation.new
         if @side == "right"
             xform_flip = Geom::Transformation.rotation(@mount_point, 
                                                        Geom::Vector3d.new(0.0, 0.0, 1.0),
                                                        180.degrees)
         end
-        target_crossline    = attach_crossline
-        cos                 = @mount_crossline.dot(target_crossline)
-        sin                 = @mount_crossline.cross(target_crossline).z
-        rotation_angle     = Math.atan2(sin,cos)
-        xform_rotate   = Geom::Transformation.rotation(@mount_point,
+        target_crossline = attach_crossline
+        cos              = @mount_crossline.dot(target_crossline)
+        sin              = @mount_crossline.cross(target_crossline).z
+        rotation_angle   = Math.atan2(sin,cos)
+        xform_rotate     = Geom::Transformation.rotation(@mount_point,
                                                        Geom::Vector3d.new(0.0, 0.0, 1.0),
                                                        rotation_angle)
         if    riserbase_kind == "top"
@@ -104,7 +106,7 @@ class RiserBase
             top_riserbase      = riser.top_riserbase(@side)
             top_pt             = top_riserbase.insert_point
             m                  = top_riserbase.projected_mount_point
-            @target_point         = Geom::Point3d.new(m.x, m.y, bottom_base_offset)
+            @target_point         = Geom::Point3d.new(m.x, m.y, @structure_h)
             shift              = @target_point - @mount_point
             xform_shift        = Geom::Transformation.translation(shift)
             xform_bottom       = xform_shift * xform_rotate * xform_flip
@@ -116,11 +118,11 @@ class RiserBase
         @instance.material = "Goldenrod"
         @instance.set_attribute("RiserBaseAttributes", "side", @side)
         @instance.set_attribute("RiserBaseAttributes", "kind", riserbase_kind)
+        @instance.set_attribute("RiserBaseAttributes", "structure_h", @structure_h)
     end
 #                                                     begin external interface
     def insert_points(apply_xform = true)
         points        = []
-        pe            = []
         inside_pts    = []
         outside_pts   = []
         definition    = @instance.definition
@@ -152,9 +154,6 @@ class RiserBase
                 end
             end
         }
-        if pe.length == 0
-            puts "riserbase.insert_points, didnt find outside_edge"
-        end
         if apply_xform
             xform = @instance.transformation
             points.each_with_index { |p,i| points[i] = p.transform(xform) }

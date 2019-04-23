@@ -141,7 +141,7 @@ class Risers
         return str
     end
 
-    def create_new_riser(base, basedata, riser_defs, structure_h, stop_after_build)
+    def create_new_riser(base, basedata, riser_defs, stop_after_build)
         riser_group  = @risers_group.entities.add_group
 
         attach_point = basedata["attach_point"]
@@ -149,20 +149,20 @@ class Risers
         rb_def = riser_defs["riserbase_b"]
         rc_thickness = rc_def.get_attribute("RiserConnectorAttrs", "thickness")
         rb_depth     = rb_def.bounds.depth
+        structure_h  = Trk.find_structure_top(attach_point)
         puts "risers.create_new_riser, structure_h    = #{structure_h}, \n" +
                                       "rc_thickness   = #{rc_thickness}, \n" +
                                       "rb_depth       = #{rb_depth}, \n" +
                                       "attach_point   = #{attach_point}\n" +
                                       "attach_point.z = #{attach_point.z} \n" 
         cl = attach_point.z - rc_thickness - 2 * rb_depth - structure_h
-        puts "risers.create_new_riser, cl = #{cl}"
         if cl > 0.5
             puts "risers.create_new_riser, creating Riser"
 
             riser_group.name = "riser"
             riser = Riser.new(riser_group, @riser_count,
                             base, basedata, riser_defs,
-                            structure_h, stop_after_build)
+                            stop_after_build)
         else
             puts "risers.create_new_riser, creating RiserShim"
 

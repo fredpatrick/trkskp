@@ -669,6 +669,20 @@ module Trk
         return xform
     end
 
+    def build_transformation(source_point, source_xline, source_normal,
+                             target_point, target_xline, slope=0.0)
+        cos = source_xline.dot(target_xline)
+        sin = (source_xline.cross(target_xline)).z
+        angle = Math.atan2(sin, cos)
+        puts "build_transformation, angle = #{angle}"
+        delta = -Math.atan(slope)
+        puts "build_transformation, delta = #{delta}"
+        xform_slope       = Geom::Transformation.rotation(source_point, source_xline, delta)
+        xform_rotation    = Geom::Transformation.rotation(source_point, source_normal, angle)
+        xform_translation = Geom::Transformation.translation(target_point - source_point)
+        return xform_translation * xform_rotation * xform_slope
+    end
+
     def make_filename(fname)
         homedir  = Sketchup.active_model.get_attribute("DirectoryAttributes", "home_directory")
         workdir  = Sketchup.active_model.get_attribute("DirectoryAttributes", "work_directory")

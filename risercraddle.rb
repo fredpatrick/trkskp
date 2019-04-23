@@ -74,19 +74,21 @@ class RiserCraddle < RiserConnector
         @attach_normals     = @definition.get_attribute(rca, "attach_normals")
         @secondary          = @definition.get_attribute(rca, "secondary")
         @thickness          = @definition.get_attribute(rca, "thickness")
-        @definition_type    = @definition.get_attribute(tda, "definition_type")
-        if @definition_type == "risercraddle_p"
-            @risertext_points   = @definition.get_attribute(rca, "risertext_points")
-            @risertext_normals  = @definition.get_attribute(rca, "risertext_normals")
-            @attach_face_pid    = @definition.get_attribute(rca, "attach_face_pid")
-            @definition.entities.each do |e|
-                if e.is_a? Sketchup::Face
-                    if e.persistent == @attach_face_pid
-                        @attach_face = e
-                        break
-                    end
+        @attach_face_pid    = @definition.get_attribute(rca, "attach_face_pid")
+        @definition.entities.each do |e|
+            if e.is_a? Sketchup::Face
+                if e.persistent_id == @attach_face_pid
+                    @attach_face = e
+                    puts "risercraddle.initialize, found attach_face"
+                    break
                 end
             end
+        end
+        @definition_type    = @definition.get_attribute(tda, "definition_type")
+        if @definition_type == "risercraddle_p"
+            @attach_rt_points   = @definition.get_attribute(rca, "attach_rt_points")
+            @attach_rt_normals  = @definition.get_attribute(rca, "attach_rt_normals")
+            @attach_rt_xlines   = @definition.get_attribute(rca, "attach_rt_xlines")
         end
         @definition.material = Sketchup::Color.new(255, 255, 0)
         if @instance.nil?                           # creating new instance of risercraddle
@@ -100,6 +102,7 @@ class RiserCraddle < RiserConnector
             cos              = @mount_crossline.dot(target_crossline)
             sin              = @mount_crossline.cross(target_crossline).z
             rotation_angle   = Math.atan2(sin,cos)
+            puts "risercraddle.initialize, rotation_angle = #{rotation_angle}"
             shift            = @target_point - @mount_point
             alpha = -Math.atan(@slope)
             xform_slope    = Geom::Transformation.rotation(@mount_point, 
@@ -122,9 +125,6 @@ class RiserCraddle < RiserConnector
 
         @rc_index = @instance.get_attribute("RiserConnectorAttrs", "rc_index")
         @guid                   = @instance.guid
-        puts "RiserCraddle.initialize, definition name = #{@definition.name}"
-        puts "RiserCraddle.initialize, instance name   = #{@instance.name}"
-        puts "########################################End RiserCraddle.new ###################"
     end
 
     def attach_face
@@ -135,19 +135,51 @@ class RiserCraddle < RiserConnector
         return @guid
     end
 
-    def set_risertext(riser, side)
-        riser_index = riser.riser_index
-        parent_group = riser.riser_group
-        target_point = risertext_point(side)
-        risertext = RiserText.new(parent_group, 0.8, riser_index, side)
-        p0   = risertext.center
-        xform_r = Geom::Transformation.new
-        if side == "right"
-            xform_r = Geom::Transformation.rotation(p0, uz, Math::PI)
+    def attach_rt_point(side)
+        i = 1
+        if side == "left"
+            i = 0
         end
-        vt  = target_point - p0
-        xform_t = Geom::Transformation.translation(vt)
-        risertext.set_transformation( xform_t * xform_r)
+        return @attach_rt_points[i].transform(@instance.transformation)
+    end
+
+    def attach_rt_xline(side)
+        i = 1
+        if side == "left"
+            i = 0
+        end
+        return @attach_rt_xlines[i].transform(@instance.transformation)
+    end
+
+    def set_risertext(riser, side)
+        riser_index      = riser.riser_index
+        parent_group     = riser.riser_group
+        target_point     = attach_rt_point(side)
+        target_xline     = attach_rt_xline(side)
+        puts "risercraddle.set_risertext target_point    = #{target_point}"
+        puts "risercraddle.set_risertext target_xline    = #{target_xline}"
+        risertext        = RiserText.new(parent_group, 0.6, riser_index, side)
+        rt_point  = risertext.point
+        rt_xline  = risertext.crossline
+        rt_normal = risertext.normal
+        puts "risercraddle.set_risertext source_point    = #{rt_point}"
+        puts "risercraddle.set_risertext source_xline    = #{rt_xline}"
+        puts "risercraddle.set_risertext source_normal   = #{rt_normal}"
+        puts "risercraddle.set_risertext slope           = #{@slope}"
+        rt_slope = @slope
+        if side == "left" 
+            rt_slope = -@slope
+        end
+        xform_rt = Trk.build_transformation(rt_point,     rt_xline,     rt_normal,
+                                            target_point, target_xline, rt_slope)
+       #p0   = risertext.center
+       #uz   = Geom::Vector3d.new(0.0, 0.0, 1.0)
+       #xform_r = Geom::Transformation.new
+       #if side == "right"
+       #    xform_r = Geom::Transformation.rotation(source_point, source_normal, Math::PI)
+       #end
+                                      
+        risertext.set_transformation( xform_rt )
     end
 
 ############################################################### Begin RiserCraddle class defs
@@ -167,14 +199,21 @@ class RiserCraddle < RiserConnector
         tags.each_pair do |k,v|
             puts "edit_risercraddle, #{k}, #{v}"
         end
+        ret = UI.messagebox("Define RCA attribute secondary as false?", MB_YESNO)
+        secondary = true
+        if ret == IDYES
+            secondary = false
+        end
+        definition.set_attribute("RiserConnectorAttrs", "secondary", secondary)
         mount_point       = nil
         mount_crossline   = nil
         mount_normal      = nil
         attach_points     = []
         attach_crosslines = []
         attach_normals    = []
-        risertext_points  = []
-        risertext_normals = []
+        attach_rt_points  = []
+        attach_rt_normals = []
+        attach_rt_xlines  = []
         attach_face       = nil
        
         ttag = tags["mount_point"]
@@ -182,40 +221,43 @@ class RiserCraddle < RiserConnector
         definition.set_attribute("RiserConnectorAttrs", "mount_point",       ttag.point)
         definition.set_attribute("RiserConnectorAttrs", "mount_crossline",   ttag.crossline)
         definition.set_attribute("RiserConnectorAttrs", "mount_normal",      ttag.normal)
-
-        ttag = tags["risertext_face_1"]
-        raise RuntimeError, "edit_risercraddle, no risertext_face_1 tag_group" if ttag.nil?
-        risertext_points[0]  = ttag.face.bounds.center
-        risertext_normals[0] = ttag.normal
-        ttag = tags["risertext_face_2"]
-        raise RuntimeError, "edit_risercraddle, no risertext_face_2 tag_group" if ttag.nil?
-        risertext_points[1]  = ttag.face.bounds.center
-        risertext_normals[1] = ttag.normal
-        definition.set_attribute("RiserConnectorAttrs", "risertext_points",  risertext_points)
-        definition.set_attribute("RiserConnectorAttrs", "risertext_normals", risertext_normals)
+        mount_point          = tags["mount_point"].point
 
         ttag = tags["attach_face"]
         raise RuntimeError, "edit_risercraddle, no attach_face tag_group" if ttag.nil?
         attach_face = ttag.face
+        attach_face_pid = attach_face.persistent_id
+        definition.set_attribute("RiserConnectorAttrs", "attach_face_pid",   attach_face_pid)
+        definition.set_attribute("RiserConnectorAttrs", "side_count",        2)            
+        definition.set_attribute("RiserConnectorAttrs", "thickness",         0.21875)
+        return if secondary
+
+        ttag = tags["risertext_face_1"]
+        raise RuntimeError, "edit_risercraddle, no risertext_face_1 tag_group" if ttag.nil?
+        attach_rt_points[0]  = ttag.face.bounds.center
+        attach_rt_normals[0] = ttag.normal
+        v                    = mount_point - attach_rt_points[0]
+        v.z                  = 0.0
+        attach_rt_xlines[0]  = v.normalize!
+        ttag = tags["risertext_face_2"]
+        raise RuntimeError, "edit_risercraddle, no attach_rt_face_2 tag_group" if ttag.nil?
+        attach_rt_points[1]  = ttag.face.bounds.center
+        attach_rt_normals[1] = ttag.normal
+        v                    = mount_point - attach_rt_points[1]
+        v.z                  = 0.0
+        attach_rt_xlines[1]  = v.normalize!
+        definition.set_attribute("RiserConnectorAttrs", "attach_rt_points",  attach_rt_points)
+        definition.set_attribute("RiserConnectorAttrs", "attach_rt_normals", attach_rt_normals)
+        definition.set_attribute("RiserConnectorAttrs", "attach_rt_xlines", attach_rt_xlines)
+
         2.times do |k|
-            attach_points[k]     = risertext_points[k].project_to_plane(attach_face.plane)
+            attach_points[k]     = attach_rt_points[k].project_to_plane(attach_face.plane)
             attach_crosslines[k] = ttag.crossline
             attach_normals[k]    = ttag.normal
         end
         definition.set_attribute("RiserConnectorAttrs", "attach_points",     attach_points)
         definition.set_attribute("RiserConnectorAttrs", "attach_crosslines", attach_crosslines)
         definition.set_attribute("RiserConnectorAttrs", "attach_normals",    attach_normals)
-
-        attach_face_pid = attach_face.persistent_id
-        definition.set_attribute("RiserConnectorAttrs", "side_count",        2)            
-        definition.set_attribute("RiserConnectorAttrs", "attach_face_pid",   attach_face_pid)
-        definition.set_attribute("RiserConnectorAttrs", "thickness",         0.21875)
-        ret = UI.messagebox("Define RCA attribute secondary as false?", MB_YESNO)
-        if ret == IDYES
-            definition.set_attribute("RiserConnectorAttrs", "secondary", false)
-        else
-            definition.set_attribute("RiserConnectorAttrs", "secondary", true )
-        end
     end
 ########################################################## end RiserCraddle class defs
 end

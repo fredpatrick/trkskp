@@ -51,6 +51,7 @@ require "#{$trkdir}/trk.rb"
 class AddRiser
     def initialize
         puts "AddRiserConnector.initialize"
+        test_rotate_code
         TrackTools.tracktools_init("AddRiser")
 
         cursor_path = Sketchup.find_support_file("riser_cursor_0.png",
@@ -107,7 +108,7 @@ class AddRiser
         @riser_defs["riserbase_t"]    = Sketchup.active_model.definitions[rbt_nam]
         @riser_defs["riserbase_b"]    = Sketchup.active_model.definitions[rbb_nam]
 
-        @riser_defs.each_pair { |k,v| puts sprintf("%15s - %12s\n", k, v.name) } 
+        @riser_defs.each_pair { |k,v| puts sprintf("%-15s - %-12s\n", k, v.name) } 
 
         @cursor_id      = @cursor_looking
         @state          = "looking"
@@ -203,9 +204,7 @@ class AddRiser
         puts @base.basedata_to_s(@basedata,1)
         begin
             attach_point = @basedata["attach_point"]
-            structure_h  = Trk.find_structure_top(attach_point)
-            @riser = $risers.create_new_riser(@base, @basedata, @riser_defs,
-                                              structure_h, @stop_after_build)
+            @riser = $risers.create_new_riser(@base, @basedata, @riser_defs, @stop_after_build)
         rescue => ex
             puts ex.to_s
             $logfile.puts ex.to_s
@@ -298,5 +297,27 @@ class AddRiser
     end
     def reset_camera(view, eye, target, up)
         view.camera.set(eye, target, up)
+    end
+
+    def test_rotate_code
+        source_xline  = Geom::Vector3d.new(1.0, 0.0, 0.0)
+        source_normal = Geom::Vector3d.new(0.0, 0.0, 1.0)
+        source_point  = Geom::Point3d.new( 0.3, 0.0, 0.0)
+        12.times do |n|
+            theta_d = n * 30.0
+            theta_r = theta_d.degrees
+            target_xline = Geom::Vector3d.new(Math.cos(theta_r), Math.sin(theta_r), 0.0)
+            target_point = Geom::Point3d.new( 0.3 * Math.cos(theta_r), 0.3 * Math.sin(theta_r), 0.0)
+
+            cos = source_xline.dot(target_xline)
+            sin = (source_xline.cross(target_xline)).z
+            angle = Math.atan2(sin, cos)
+            xform_rotation = Geom::Transformation.rotation(source_point, source_normal, angle)
+            xform_translation = Geom::Transformation.translation(target_point - source_point)
+            xform = xform_translation * xform_rotation
+            v     = source_xline.transform(xform)
+            puts sprintf("%4d %10.6f %10.6f %10.6f %10.6f %10.6f %10.6f", 
+                                    n, theta_d, cos, sin, angle, v.x, v.y)
+        end
     end
 end        #end of class AddRiser

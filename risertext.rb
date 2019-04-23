@@ -66,7 +66,7 @@ class RiserText
             t = "R"
         end
         txt    = sprintf("%03d%1s", @riser_index, t)
-        @test = txt
+        @text = txt
         char_group = risertext_group.entities.add_group
         char_group.entities.add_3d_text(txt, TextAlignLeft, 
                      ofont, obold, false, text_h, 0.6, z, ofill)
@@ -77,6 +77,10 @@ class RiserText
         ymn      = bb_text.min.y - 0.03125
         ymx      = bb_text.max.y + 0.03125
         bkz      = 0.015625
+       #puts "risertext.initialize xmn = #{xmn}"
+       #puts "risertext.initialize xmx = #{xmx}"
+       #puts "risertext.initialize ymn = #{ymn}"
+       #puts "risertext.initialize ymx = #{ymx}"
         p0   = Geom::Point3d.new(xmn, ymn, bkz)
         p1   = Geom::Point3d.new(xmn, ymx, bkz)
         p2   = Geom::Point3d.new(xmx, ymx, bkz)
@@ -92,11 +96,26 @@ class RiserText
         xform = Geom::Transformation.translation( vt)
         char_group.transform! xform
         char_entities = char_group.explode
-        @bounds = @risertext_group.bounds
+        @bounds    = @risertext_group.bounds
+        @point     = @bounds.center
+        @inline    = Geom::Vector3d.new(1.0, 0.0, 0.0)
+        @crossline = Geom::Vector3d.new(0.0, 1.0, 0.0)
+        @normal    = Geom::Vector3d.new(0.0, 0.0, 1.0)
+        @risertext_group.set_attribute("RiserTextAttributes", "text",      @text)
+        @risertext_group.set_attribute("RiserTextAttributes", "point",     @point)
+        @risertext_group.set_attribute("RiserTextAttributes", "inline",    @inline)
+        @risertext_group.set_attribute("RiserTextAttributes", "crossline", @crossline)
+        @risertext_group.set_attribute("RiserTextAttributes", "normal",    @normal)
+
+       #puts "risetext.initialize,bounds xmn = #{@bounds.min.x}"
+       #puts "risetext.initialize,bounds xmx = #{@bounds.max.x}"
+       #puts "risetext.initialize,bounds ymn = #{@bounds.min.y}"
+       #puts "risetext.initialize,bounds ymx = #{@bounds.max.y}"
     end
 
     def set_transformation(xform)
-        risertext_group.transformation = xform
+        puts "risertext.set_trnsformation/n" + Trk.dump_transformation(xform)
+        @risertext_group.transformation = xform
     end
 
     def risertext_group
@@ -105,6 +124,22 @@ class RiserText
 
     def text 
         return @text
+    end
+
+    def point
+        return @point
+    end
+
+    def inline
+        return @inline
+    end
+
+    def crossline
+        return @crossline
+    end
+
+    def normal
+        return @normal
     end
 
     def bounds

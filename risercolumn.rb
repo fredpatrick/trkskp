@@ -136,7 +136,6 @@ class RiserColumn
             if it == 3
                 pts = []
                 f.vertices.each { |v| pts << v.position }
-                f.vertices.each { |v| puts "riser.outside_face? #{v.position}" }
                 return pts
             end
         end
@@ -230,10 +229,8 @@ class RiserColumn
         bb          = outside_face.bounds
         xt = 0.5 * (bb.max.x + bb.min.x)
         yt = bb.min.y
-        zt = bb.max.z - offset_text
-        puts "riser.set_risertext, bb.max.z = #{bb.max.z}, offset_text = #{offset_text}"
+        zt = bb.max.z - 0.375 - 0.5 * text_width
         target_point = Geom::Point3d.new(xt, yt, zt)
-        puts "riser.set_risertest, target_point = #{target_point}"
 
         vt = target_point - p0
         xform_t = Geom::Transformation.translation(vt)
